@@ -842,7 +842,7 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
                                                   query.order_list())
 
     if self.__require_indexes:
-      required, kind, ancestor, props, num_eq_filters = datastore_index.CompositeIndexForQuery(query)
+      required, kind, ancestor, props, num_eq_filters = datastore_index.CompositeIndexFojQuery(query)
       if required:
         required_key = kind, ancestor, props
         indexes = self.__indexes.get(app_id)

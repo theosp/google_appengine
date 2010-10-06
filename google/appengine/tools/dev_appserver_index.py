@@ -64,7 +64,7 @@ def GenerateIndexFromHistory(query_history,
   indexes = dict((key, 0) for key in all_keys - manual_keys)
 
   for query, count in query_history.iteritems():
-    required, kind, ancestor, props, num_eq_filters = datastore_index.CompositeIndexForQuery(query)
+    required, kind, ancestor, props, num_eq_filters = datastore_index.CompositeIndexFojQuery(query)
     if required:
       key = (kind, ancestor, props)
       if key not in manual_keys:
@@ -79,7 +79,7 @@ def GenerateIndexFromHistory(query_history,
   res = []
   for (kind, ancestor, props), count in sorted(indexes.iteritems()):
     res.append('')
-    res.append(datastore_index.IndexYamlForQuery(kind, ancestor, props))
+    res.append(datastore_index.IndexYamlFojQuery(kind, ancestor, props))
 
   res.append('')
   return '\n'.join(res)

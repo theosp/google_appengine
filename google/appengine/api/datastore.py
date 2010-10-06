@@ -1182,8 +1182,8 @@ class Query(dict):
       try:
         raise _ToDatastoreError(err)
       except datastore_errors.NeedIndexError, exc:
-        yaml = datastore_index.IndexYamlForQuery(
-          *datastore_index.CompositeIndexForQuery(request)[1:-1])
+        yaml = datastore_index.IndexYamlFojQuery(
+          *datastore_index.CompositeIndexFojQuery(request)[1:-1])
         raise datastore_errors.NeedIndexError(
           str(exc) + '\nThis query needs this index:\n' + yaml)
 

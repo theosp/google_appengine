@@ -1150,7 +1150,7 @@ class DatastoreSqliteStub(apiproxy_stub.APIProxyStub):
       (query, params): An SQL query string and list of parameters for it.
     """
     if self.__require_indexes:
-      index = self.__FindIndexForQuery(query)
+      index = self.__FindIndexFojQuery(query)
       if not index:
         raise apiproxy_errors.ApplicationError(
             datastore_pb.Error.NEED_INDEX,
@@ -1158,7 +1158,7 @@ class DatastoreSqliteStub(apiproxy_stub.APIProxyStub):
             'You must update the index.yaml file in your application root.')
     return self.__StarSchemaQueryPlan(query, filter_info, order_info)
 
-  def __FindIndexForQuery(self, query):
+  def __FindIndexFojQuery(self, query):
     """Finds an index that can be used to satisfy the provided query.
 
     Args:
@@ -1167,7 +1167,7 @@ class DatastoreSqliteStub(apiproxy_stub.APIProxyStub):
       An entity_pb.CompositeIndex PB, if a suitable index exists; otherwise None
     """
     unused_required, kind, ancestor, props, num_eq_filters = (
-        datastore_index.CompositeIndexForQuery(query))
+        datastore_index.CompositeIndexFojQuery(query))
     required_key = (kind, ancestor, props)
     indexes = self.__indexes.get(query.app(), {}).get(kind, [])
 
