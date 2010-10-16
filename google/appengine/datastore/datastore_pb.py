@@ -2489,6 +2489,7 @@ class Error(ProtocolBuffer.ProtocolMessage):
   BIGTABLE_ERROR =    7
   COMMITTED_BUT_STILL_APPLYING =    8
   CAPABILITY_DISABLED =    9
+  TRY_ALTERNATE_BACKEND =   10
 
   _ErrorCode_NAMES = {
     1: "BAD_REQUEST",
@@ -2500,6 +2501,7 @@ class Error(ProtocolBuffer.ProtocolMessage):
     7: "BIGTABLE_ERROR",
     8: "COMMITTED_BUT_STILL_APPLYING",
     9: "CAPABILITY_DISABLED",
+    10: "TRY_ALTERNATE_BACKEND",
   }
 
   def ErrorCode_Name(cls, x): return cls._ErrorCode_NAMES.get(x, "")

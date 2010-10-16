@@ -56,6 +56,8 @@ def CreateBlobImageDispatcher(images_stub):
     _uncropped_sizes = [0, 32, 48, 64, 72, 80, 90, 94, 104, 110, 120, 128, 144,
                         150, 160, 200, 220, 288, 320, 400, 512, 576, 640, 720,
                         800, 912, 1024, 1152, 1280, 1440, 1600]
+    _mime_type_map = {images_service_pb.OutputSettings.JPEG: 'image/jpeg',
+                      images_service_pb.OutputSettings.PNG: 'image/png'}
 
     def __init__(self, images_stub):
       """Constructor.
@@ -77,9 +79,9 @@ def CreateBlobImageDispatcher(images_stub):
       """
       resize, crop = self._ParseOptions(options)
       image_data = images_service_pb.ImageData()
-      image_data.set_blob_key(blob_key);
+      image_data.set_blob_key(blob_key)
       image = self._images_stub._OpenImageData(image_data)
-
+      original_mime_type = image.format
 
       if crop:
         width, height = image.size
@@ -106,8 +108,12 @@ def CreateBlobImageDispatcher(images_stub):
         image = self._images_stub._Resize(image, resize_xform)
 
       output_settings = images_service_pb.OutputSettings()
-      output_settings.set_mime_type(images_service_pb.OutputSettings.JPEG)
-      return self._images_stub._EncodeImage(image, output_settings)
+      output_mime_type = images_service_pb.OutputSettings.JPEG
+      if original_mime_type in ['PNG', 'GIF']:
+        output_mime_type = images_service_pb.OutputSettings.PNG
+      output_settings.set_mime_type(output_mime_type)
+      return (self._images_stub._EncodeImage(image, output_settings),
+              self._mime_type_map[output_mime_type])
 
     def _ParseOptions(self, options):
       """Currently only support resize and crop options.
@@ -177,9 +183,9 @@ def CreateBlobImageDispatcher(images_stub):
         if base_env_dict and base_env_dict['REQUEST_METHOD'] != 'GET':
           raise RuntimeError, 'BlobImage only handles GET requests.'
 
-        blobkey, options = self._ParseUrl(request.relative_url);
-        image = self._TransformImage(blobkey, options)
-        output_dict = { 'status': 200, 'content_type': 'image/jpeg',
+        blobkey, options = self._ParseUrl(request.relative_url)
+        image, mime_type = self._TransformImage(blobkey, options)
+        output_dict = { 'status': 200, 'content_type': mime_type,
                         'data': image }
         outfile.write(BLOBIMAGE_RESPONSE_TEMPLATE % output_dict)
       except ValueError:

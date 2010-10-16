@@ -468,6 +468,10 @@ def ConfigureRemoteApi(app_id,
     default_auth_domain: The authentication domain to use by default.
     save_cookies: Forwarded to rpc_server_factory function.
 
+  Returns:
+    server, the server created by rpc_server_factory, which may be useful for
+      calling the application directly.
+
   Raises:
     urllib2.HTTPError: if app_id is not provided and there is an error while
       retrieving it.
@@ -520,6 +524,8 @@ def ConfigureRemoteApi(app_id,
   stub = RemoteStub(server, path)
   for service in services:
     apiproxy_stub_map.apiproxy.RegisterStub(service, stub)
+
+  return server
 
 
 def MaybeInvokeAuthentication():

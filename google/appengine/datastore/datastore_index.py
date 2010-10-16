@@ -275,7 +275,7 @@ def RemoveNativelySupportedComponents(filters, orders):
   return (filters, orders)
 
 
-def CompositeIndexFojQuery(query):
+def CompositeIndexForQuery(query):
   """Return the composite index needed for a query.
 
   A query is translated into a tuple, as follows:
@@ -425,10 +425,10 @@ def CompositeIndexFojQuery(query):
   return (required, kind, ancestor, tuple(props), len(eq_filters))
 
 
-def IndexYamlFojQuery(kind, ancestor, props):
+def IndexYamlForQuery(kind, ancestor, props):
   """Return the composite index definition YAML needed for a query.
 
-  The arguments are the same as the tuples returned by CompositeIndexFojQuery,
+  The arguments are the same as the tuples returned by CompositeIndexForQuery,
   without the last neq element.
 
   Args:

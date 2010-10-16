@@ -478,11 +478,13 @@ class Image(object):
     else:
       imagedata.set_content(self._image_data)
 
-  def execute_transforms(self, output_encoding=PNG):
+  def execute_transforms(self, output_encoding=PNG, quality=None):
     """Perform transformations on given image.
 
     Args:
       output_encoding: A value from OUTPUT_ENCODING_TYPES.
+      quality: A value between 1 and 100 to specify the quality of the
+      encoding.  This value is only used for JPEG quality control.
 
     Returns:
       str, image data after the transformations have been performed on it.
@@ -504,6 +506,12 @@ class Image(object):
     if not self._transforms:
       raise BadRequestError("Must specify at least one transformation.")
 
+    if quality is not None:
+        if not isinstance(quality, (int, long)):
+          raise TypeError("Quality must be an integer.")
+        if quality > 100 or quality < 1:
+          raise BadRequestError("Quality must be between 1 and 100.")
+
     request = images_service_pb.ImagesTransformRequest()
     response = images_service_pb.ImagesTransformResponse()
 
@@ -513,6 +521,10 @@ class Image(object):
       request.add_transform().CopyFrom(transform)
 
     request.mutable_output().set_mime_type(output_encoding)
+
+    if ((output_encoding == JPEG) and
+        (quality is not None)):
+      request.mutable_output().set_quality(quality)
 
     try:
       apiproxy_stub_map.MakeSyncCall("images",
@@ -728,7 +740,7 @@ def im_feeling_lucky(image_data, output_encoding=PNG):
   image.im_feeling_lucky()
   return image.execute_transforms(output_encoding=output_encoding)
 
-def composite(inputs, width, height, color=0, output_encoding=PNG):
+def composite(inputs, width, height, color=0, output_encoding=PNG, quality=None):
   """Composite one or more images onto a canvas.
 
   Args:
@@ -747,6 +759,8 @@ def composite(inputs, width, height, color=0, output_encoding=PNG):
     color: canvas background color encoded as a 32 bit unsigned int where each
     color channel is represented by one byte in order ARGB.
     output_encoding: a value from OUTPUT_ENCODING_TYPES.
+    quality: A value between 1 and 100 to specify the quality of the
+    encoding.  This value is only used for JPEG quality control.
 
   Returns:
       str, image data of the composited image.
@@ -766,6 +780,12 @@ def composite(inputs, width, height, color=0, output_encoding=PNG):
   if output_encoding not in OUTPUT_ENCODING_TYPES:
     raise BadRequestError("Output encoding type '%s' not in recognized set "
                           "%s" % (output_encoding, OUTPUT_ENCODING_TYPES))
+
+  if quality is not None:
+    if not isinstance(quality, (int, long)):
+      raise TypeError("Quality must be an integer.")
+    if quality > 100 or quality < 1:
+      raise BadRequestError("Quality must be between 1 and 100.")
 
   if not inputs:
     raise BadRequestError("Must provide at least one input")
@@ -824,6 +844,10 @@ def composite(inputs, width, height, color=0, output_encoding=PNG):
   request.mutable_canvas().set_width(width)
   request.mutable_canvas().set_height(height)
   request.mutable_canvas().set_color(color)
+
+  if ((output_encoding == JPEG) and
+        (quality is not None)):
+      request.mutable_canvas().mutable_output().set_quality(quality)
 
   try:
     apiproxy_stub_map.MakeSyncCall("images",

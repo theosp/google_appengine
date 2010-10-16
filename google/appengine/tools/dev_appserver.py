@@ -84,6 +84,7 @@ from google.pyglib import gexcept
 
 from google.appengine.api import apiproxy_stub_map
 from google.appengine.api import appinfo
+from google.appengine.api import appinfo_includes
 from google.appengine.api import blobstore
 from google.appengine.api import croninfo
 from google.appengine.api import datastore_admin
@@ -98,6 +99,7 @@ from google.appengine.api.blobstore import file_blob_storage
 from google.appengine.api.capabilities import capability_stub
 from google.appengine.api.channel import channel_service_stub
 from google.appengine.api.labs.taskqueue import taskqueue_stub
+from google.appengine.api.matcher import matcher_stub
 from google.appengine.api.memcache import memcache_stub
 from google.appengine.api.xmpp import xmpp_service_stub
 from google.appengine.datastore import datastore_sqlite_stub
@@ -3076,6 +3078,9 @@ def CreateRequestHandler(root_path,
 
     rewriter_chain = CreateResponseRewritersChain()
 
+    channel_poll_path_re = re.compile(
+        dev_appserver_channel.CHANNEL_POLL_PATTERN)
+
     def __init__(self, *args, **kwargs):
       """Initializer.
 
@@ -3272,13 +3277,16 @@ def CreateRequestHandler(root_path,
 
     def log_message(self, format, *args):
       """Redirect log messages through the logging module."""
-      logging.info(format, *args)
+      if self.channel_poll_path_re.match(self.path):
+        logging.debug(format, *args)
+      else:
+        logging.info(format, *args)
 
   return DevAppServerRequestHandler
 
 
 
-def ReadAppConfig(appinfo_path, parse_app_config=appinfo.LoadSingleAppInfo):
+def ReadAppConfig(appinfo_path, parse_app_config=appinfo_includes.Parse):
   """Reads app.yaml file and returns its app id and list of URLMap instances.
 
   Args:
@@ -3444,7 +3452,7 @@ def LoadAppConfig(root_path,
         cache.mtime = mtime
 
       try:
-        config = read_app_config(appinfo_path, appinfo.LoadSingleAppInfo)
+        config = read_app_config(appinfo_path, appinfo_includes.Parse)
 
         if static_caching:
           if config.default_expiration:
@@ -3513,6 +3521,7 @@ def SetupStubs(app_id, **config):
     login_url: Relative URL which should be used for handling user login/logout.
     blobstore_path: Path to the directory to store Blobstore blobs in.
     datastore_path: Path to the file to store Datastore file stub data in.
+    matcher_path: Path to the file to store Matcher stub data in.
     use_sqlite: Use the SQLite stub for the datastore.
     history_path: DEPRECATED, No-op.
     clear_datastore: If the datastore should be cleared on startup.
@@ -3539,6 +3548,8 @@ def SetupStubs(app_id, **config):
   blobstore_path = config['blobstore_path']
   datastore_path = config['datastore_path']
   clear_datastore = config['clear_datastore']
+  matcher_path = config.get('matcher_path', '')
+  clear_matcher = config.get('clear_matcher', False)
   use_sqlite = config.get('use_sqlite', False)
   require_indexes = config.get('require_indexes', False)
   smtp_host = config.get('smtp_host', None)
@@ -3555,6 +3566,14 @@ def SetupStubs(app_id, **config):
   serve_address = config.get('address', 'localhost')
 
   os.environ['APPLICATION_ID'] = app_id
+
+  if clear_matcher and matcher_path:
+    if os.path.lexists(matcher_path):
+      logging.info('Attempting to remove file at %s', matcher_path)
+      try:
+        remove(matcher_path)
+      except OSError, e:
+        logging.warning('Removing file failed: %s', e)
 
   if clear_datastore:
     path = datastore_path
@@ -3622,6 +3641,13 @@ def SetupStubs(app_id, **config):
   apiproxy_stub_map.apiproxy.RegisterStub(
       'channel',
       channel_service_stub.ChannelServiceStub())
+
+  apiproxy_stub_map.apiproxy.RegisterStub(
+      'matcher',
+      matcher_stub.MatcherStub(
+          matcher_path,
+          apiproxy_stub_map.apiproxy.GetStub('taskqueue')))
+
 
 
 
@@ -3723,14 +3749,14 @@ def CreateImplicitMatcher(
   channel_dispatcher = dev_appserver_channel.CreateChannelDispatcher(
       apiproxy_stub_map.apiproxy.GetStub('channel'))
 
-  url_matcher.AddURL('/_ah/channel/dev(?:/.*)?',
+  url_matcher.AddURL(dev_appserver_channel.CHANNEL_POLL_PATTERN,
                      channel_dispatcher,
                      '',
                      False,
                      False,
                      appinfo.AUTH_FAIL_ACTION_UNAUTHORIZED)
 
-  url_matcher.AddURL('/_ah/channel/jsapi',
+  url_matcher.AddURL(dev_appserver_channel.CHANNEL_JSAPI_PATTERN,
                      channel_dispatcher,
                      '',
                      False,
@@ -3841,6 +3867,18 @@ class HTTPServerWithScheduler(BaseHTTPServer.HTTPServer):
     self._events = []
     self._stopped = False
 
+  def handle_request(self):
+    """Override the base handle_request call.
+
+    Python 2.6 changed the semantics of handle_request() with r61289.
+    This patches it back to the Python 2.5 version, which has
+    helpfully been renamed to _handle_request_noblock.
+    """
+    if hasattr(self, "_handle_request_noblock"):
+      self._handle_request_noblock()
+    else:
+      BaseHTTPServer.HTTPServer.handle_request(self)
+
   def get_request(self, time_func=time.time, select_func=select.select):
     """Overrides the base get_request call.
 
@@ -3872,6 +3910,7 @@ class HTTPServerWithScheduler(BaseHTTPServer.HTTPServer):
     """Handle one request at a time until told to stop."""
     while not self._stopped:
       self.handle_request()
+    self.server_close()
 
   def stop_serving_forever(self):
     """Stop the serve_forever() loop.

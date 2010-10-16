@@ -1166,9 +1166,32 @@ class Query(dict):
       prefetch_count: integer, number of results to return in the first query.
       next_count: number of results to return in subsequent next queries.
       rpc: datastore.RPC to use for this request.
+
+    Returns:
+      # an iterator that provides access to the query results
+      Iterator
     """
     rpc = GetRpcFromKwargs(kwargs)
-    request = self._ToPb(limit, offset, prefetch_count)
+    self.__last_iterator, self.__compiled_query = Query._RunInternal(
+        self._ToPb(limit, offset, prefetch_count),
+        next_count=next_count,
+        rpc=rpc)
+
+    return self.__last_iterator
+
+  @staticmethod
+  def _RunInternal(request, next_count=None, rpc=None):
+    """Runs the given request and wraps the result in an iterator.
+
+    Args:
+      request: datastore_pb.query, the request to run.
+      next_count: number of results to return in subsequent next queries.
+      rpc: datastore.RPC to use for this request.
+
+    Returns:
+      (Iterator, datastore_pb.CompiledQuery), the iterator and compiled query
+      that result from running the given request.
+    """
 
     if rpc:
       rpc_clone = rpc.clone()
@@ -1182,22 +1205,17 @@ class Query(dict):
       try:
         raise _ToDatastoreError(err)
       except datastore_errors.NeedIndexError, exc:
-        yaml = datastore_index.IndexYamlFojQuery(
-          *datastore_index.CompositeIndexFojQuery(request)[1:-1])
+        yaml = datastore_index.IndexYamlForQuery(
+          *datastore_index.CompositeIndexForQuery(request)[1:-1])
         raise datastore_errors.NeedIndexError(
           str(exc) + '\nThis query needs this index:\n' + yaml)
 
-    if result.has_cursor() and not result.cursor().app():
-      result.mutable_cursor().set_app(self.__app)
-
+    iterator = Iterator(result, query_request_pb=request, batch_size=next_count,
+                        rpc=rpc_clone)
     if result.has_compiled_query():
-      self.__compiled_query = result.compiled_query()
+      return iterator, result.compiled_query()
     else:
-      self.__compiled_query = None
-
-    self.__last_iterator = Iterator(
-        result, query_request_pb=request, batch_size=next_count, rpc=rpc_clone)
-    return self.__last_iterator
+      return iterator, None
 
   def Get(self, limit, offset=0, **kwargs):
     """Fetches and returns a maximum number of results from the query.
@@ -1237,8 +1255,6 @@ class Query(dict):
       # a list of entities
       [Entity, ...]
     """
-    rpc = GetRpcFromKwargs(kwargs)
-
     if not isinstance(limit, (int, long)) or limit < 0:
       raise datastore_errors.BadArgumentError(
           'Argument to Get named \'limit\' must be an int greater than or '
@@ -2124,17 +2140,9 @@ class Iterator(object):
     elif not self.__results_since_prev:
       return self.__prev_compiled_cursor
     elif self.__prev_compiled_cursor:
-      request = query._ToPb(limit=1, offset=self.__results_since_prev, count=0)
-      request.mutable_compiled_cursor().CopyFrom(self.__prev_compiled_cursor)
-      rpc = self.__rpc
-      if rpc:
-        self.__rpc = rpc.clone()
-      try:
-        result = _MakeSyncCall('datastore_v3', 'RunQuery', request,
-                               datastore_pb.QueryResult(), rpc)
-      except apiproxy_errors.ApplicationError, err:
-        raise _ToDatastoreError(err)
-      return result.compiled_cursor()
+      return Query._RunInternal(query._ToPb(limit=0,
+                                            offset=self.__results_since_prev),
+                                rpc=self.__rpc)[0].GetCompiledCursor(query)
     else:
       return None
 

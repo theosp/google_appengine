@@ -211,6 +211,11 @@ class FancyRequest(urllib2.Request):
 
   def set_proxy(self, host, type):
     saved_type = None
+
+    # The following is necessary to handle redirects to https connections
+    if self.get_type() == "http" and not self._tunnel_host:
+      self._tunnel_host = self.get_host()
+
     if self.get_type() == "https" and not self._tunnel_host:
       self._tunnel_host = self.get_host()
       saved_type = self.get_type()
@@ -367,8 +372,13 @@ class FancyRedirectHandler(urllib2.HTTPRedirectHandler):
     # everything over piecemeal.
     if hasattr(req, "_tunnel_host") and isinstance(new_req, urllib2.Request):
       if new_req.get_type() == "https":
-        new_req._tunnel_host = new_req.get_host()
-        new_req.set_proxy(req.host, "https")
+        if req._tunnel_host:
+          # req is proxied, so copy the proxy info.
+          new_req._tunnel_host = new_req.get_host()
+          new_req.set_proxy(req.host, "https")
+        else:
+          # req is not proxied, so just make sure _tunnel_host is defined.
+          new_req._tunnel_host = None
         new_req.type = "https"
         new_req._key_file = req._key_file
         new_req._cert_file = req._cert_file

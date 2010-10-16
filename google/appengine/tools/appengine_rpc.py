@@ -99,7 +99,8 @@ class AbstractRpcServer(object):
 
   def __init__(self, host, auth_function, user_agent, source,
                host_override=None, extra_headers=None, save_cookies=False,
-               auth_tries=3, account_type=None, debug_data=True, secure=True):
+               auth_tries=3, account_type=None, debug_data=True, secure=True,
+               rpc_tries=3):
     """Creates a new HttpRpcServer.
 
     Args:
@@ -119,6 +120,8 @@ class AbstractRpcServer(object):
       auth_tries: The number of times to attempt auth_function before failing.
       account_type: One of GOOGLE, HOSTED_OR_GOOGLE, or None for automatic.
       debug_data: Whether debugging output should include data contents.
+      rpc_tries: The number of rpc retries upon http server error (i.e.
+        Response code >= 500 and < 600) before failing.
     """
     if secure:
       self.scheme = "https"
@@ -131,6 +134,7 @@ class AbstractRpcServer(object):
     self.authenticated = False
     self.auth_tries = auth_tries
     self.debug_data = debug_data
+    self.rpc_tries = rpc_tries
 
     self.account_type = account_type
 
@@ -324,14 +328,15 @@ class AbstractRpcServer(object):
       auth_tried = False
       while True:
         tries += 1
-        args = dict(kwargs)
-        url = "%s://%s%s?%s" % (self.scheme, self.host, request_path,
-                                urllib.urlencode(args))
+        url = "%s://%s%s" % (self.scheme, self.host, request_path)
+        if kwargs:
+          url += "?" + urllib.urlencode(kwargs)
         req = self._CreateRequest(url=url, data=payload)
         req.add_header("Content-Type", content_type)
         req.add_header("X-appcfg-api-version", "1")
         try:
-          logger.debug('Sending HTTP request:\n%s',
+          logger.debug('Sending %s request:\n%s',
+                       self.scheme.upper(),
                        HttpRequestToString(req, include_data=self.debug_data))
           f = self.opener.open(req)
           response = f.read()
@@ -339,7 +344,7 @@ class AbstractRpcServer(object):
           return response
         except urllib2.HTTPError, e:
           logger.debug("Got http error, this is try #%s", tries)
-          if tries > self.auth_tries:
+          if tries > self.rpc_tries:
             raise
           elif e.code == 401:
             if auth_tried:

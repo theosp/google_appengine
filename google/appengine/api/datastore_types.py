@@ -62,7 +62,9 @@ _UNAPPLIED_LOG_TIMESTAMP_SPECIAL_PROPERTY = '__unapplied_log_timestamp_us__'
 _SPECIAL_PROPERTIES = frozenset(
     [_KEY_SPECIAL_PROPERTY, _UNAPPLIED_LOG_TIMESTAMP_SPECIAL_PROPERTY])
 
-_NAMESPACE_SEPARATOR='!'
+_NAMESPACE_SEPARATOR = '!'
+
+_EMPTY_NAMESPACE_ID = 1
 
 class UtcTzinfo(datetime.tzinfo):
   def utcoffset(self, dt): return datetime.timedelta(0)
@@ -188,12 +190,39 @@ def ResolveNamespace(namespace):
 def EncodeAppIdNamespace(app_id, namespace):
   """Concatenates app id and namespace into a single string.
 
-     This method is needed for xml and datastore_file_stub.
+  This method is needed for xml and datastore_file_stub.
+
+  Args:
+    app_id: The application id to encode
+    namespace: The namespace to encode
+
+  Returns:
+    The string encoding for the app_id, namespace pair.
   """
   if not namespace:
     return app_id
   else:
     return app_id + _NAMESPACE_SEPARATOR + namespace
+
+
+def DecodeAppIdNamespace(app_namespace_str):
+  """Decodes app_namespace_str into an (app_id, namespace) pair.
+
+  This method is the reverse of EncodeAppIdNamespace and is needed for
+  datastore_file_stub.
+
+  Args:
+    app_namespace_str: An encoded app_id, namespace pair created by
+      EncodeAppIdNamespace
+
+  Returns:
+    (app_id, namespace) pair encoded in app_namespace_str
+  """
+  sep = app_namespace_str.find(_NAMESPACE_SEPARATOR)
+  if sep < 0:
+    return (app_namespace_str, '')
+  else:
+    return (app_namespace_str[0:sep], app_namespace_str[sep + 1:])
 
 
 def SetNamespace(proto, namespace):

@@ -37,18 +37,12 @@ per-transaction, so they should only be used by one tx at a time.
 
 import datetime
 import logging
-import md5
 import os
 import struct
 import sys
 import tempfile
 import threading
-import urllib
 import warnings
-try:
-  from urlparse import parse_qsl
-except ImportError:
-  from cgi import parse_qsl
 
 import cPickle as pickle
 
@@ -61,6 +55,7 @@ from google.appengine.api import datastore_types
 from google.appengine.api import users
 from google.appengine.datastore import datastore_pb
 from google.appengine.datastore import datastore_index
+from google.appengine.datastore import datastore_stub_util
 from google.appengine.runtime import apiproxy_errors
 from google.net.proto import ProtocolBuffer
 from google.appengine.datastore import entity_pb
@@ -71,9 +66,6 @@ try:
       'google.appengine.api.labs.taskqueue.taskqueue_service_pb')
 except ImportError:
   from google.appengine.api.taskqueue import taskqueue_service_pb
-
-warnings.filterwarnings('ignore', 'tempnam is a potential security risk')
-
 
 entity_pb.Reference.__hash__ = lambda self: hash(self.Encode())
 datastore_pb.Query.__hash__ = lambda self: hash(self.Encode())
@@ -379,6 +371,168 @@ class _Cursor(object):
           self.__query, result.mutable_compiled_cursor())
 
 
+class KindPseudoKind(object):
+  """Pseudo-kind for schema queries.
+
+  Provides a Query method to perform the actual query.
+
+  Public properties:
+    name: the pseudo-kind name
+  """
+  name = '__kind__'
+
+  def __init__(self, filestub):
+    """Constructor.
+
+    Initializes a __kind__ pseudo-kind definition.
+
+    Args:
+      filestub: the DatastoreFileStub instance being served by this
+          pseudo-kind.
+    """
+    self.filestub = filestub
+
+  def Query(self, entities, query, filters, orders):
+    """Perform a query on this pseudo-kind.
+
+    Args:
+      entities: all the app's entities
+      query: the original datastore_pb.Query
+      filters: the filters from query
+      orders: the orders from query
+
+    Returns:
+      (results, remaining_filters, remaining_orders)
+      results is a list of datastore.Entity
+      remaining_filters and remaining_orders are the filters and orders that
+      should be applied in memory
+    """
+    start_kind, start_inclusive, end_kind, end_inclusive = (
+        datastore_stub_util.ParseKindQuery(query, filters, orders))
+    keys_only = query.keys_only()
+    app_str = query.app()
+    namespace_str = query.name_space()
+    keys_only = query.keys_only()
+    app_namespace_str = datastore_types.EncodeAppIdNamespace(app_str,
+                                                             namespace_str)
+    kinds = []
+    if keys_only:
+      usekey = '__kind__keys'
+    else:
+      usekey = '__kind__'
+
+    for app_namespace, kind in entities:
+      if app_namespace != app_namespace_str: continue
+      if start_kind is not None:
+        if start_inclusive and kind < start_kind: continue
+        if not start_inclusive and kind <= start_kind: continue
+      if end_kind is not None:
+        if end_inclusive and kind > end_kind: continue
+        if not end_inclusive and kind >= end_kind: continue
+
+      app_kind = (app_namespace_str, kind)
+
+      kind_e = self.filestub._GetSchemaCache(app_kind, usekey)
+      if not kind_e:
+        kind_e = datastore.Entity(self.name, name=kind)
+
+        if not keys_only:
+          props = {}
+
+          for entity in entities[app_kind].values():
+            for prop in entity.protobuf.property_list():
+              prop_name = prop.name()
+              if prop_name not in props:
+                props[prop_name] = set()
+              cls = entity.native[prop_name].__class__
+              tag = self.filestub._PROPERTY_TYPE_TAGS.get(cls)
+              props[prop_name].add(tag)
+
+          properties = []
+          types = []
+          for name in sorted(props):
+            for tag in sorted(props[name]):
+              properties.append(name)
+              types.append(tag)
+          if properties:
+            kind_e['property'] = properties
+          if types:
+            kind_e['representation'] = types
+
+          self.filestub._SetSchemaCache(app_kind, usekey, kind_e)
+
+      kinds.append(kind_e)
+
+    return (kinds, [], [])
+
+
+class NamespacePseudoKind(object):
+  """Pseudo-kind for namespace queries.
+
+  Provides a Query method to perform the actual query.
+
+  Public properties:
+    name: the pseudo-kind name
+  """
+  name = '__namespace__'
+
+  def __init__(self, filestub):
+    """Constructor.
+
+    Initializes a __namespace__ pseudo-kind definition.
+
+    Args:
+      filestub: the DatastoreFileStub instance being served by this
+          pseudo-kind.
+    """
+    self.filestub = filestub
+
+  def Query(self, entities, query, filters, orders):
+    """Perform a query on this pseudo-kind.
+
+    Args:
+      entities: all the app's entities
+      query: the original datastore_pb.Query
+      filters: the filters from query
+      orders: the orders from query
+
+    Returns:
+      (results, remaining_filters, remaining_orders)
+      results is a list of datastore.Entity
+      remaining_filters and remaining_orders are the filters and orders that
+      should be applied in memory
+    """
+    start_namespace, start_inclusive, end_namespace, end_inclusive = (
+        datastore_stub_util.ParseNamespaceQuery(query, filters, orders))
+    app_str = query.app()
+
+    namespaces = set()
+
+    for app_namespace, kind in entities:
+      (app_id, namespace) = datastore_types.DecodeAppIdNamespace(app_namespace)
+      if app_id != app_str: continue
+
+      if start_namespace is not None:
+        if start_inclusive and namespace < start_namespace: continue
+        if not start_inclusive and namespace <= start_namespace: continue
+      if end_namespace is not None:
+        if end_inclusive and namespace > end_namespace: continue
+        if not end_inclusive and namespace >= end_namespace: continue
+
+      namespaces.add(namespace)
+
+    namespace_entities = []
+    for namespace in namespaces:
+      if namespace:
+        namespace_e = datastore.Entity(self.name, name=namespace)
+      else:
+        namespace_e = datastore.Entity(self.name,
+                                       id=datastore_types._EMPTY_NAMESPACE_ID)
+      namespace_entities.append(namespace_e)
+
+    return (namespace_entities, [], [])
+
+
 class DatastoreFileStub(apiproxy_stub.APIProxyStub):
   """ Persistent stub for the Python datastore API.
 
@@ -480,7 +634,14 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
     self.__file_lock = threading.Lock()
     self.__indexes_lock = threading.Lock()
 
+    self.__pseudo_kinds = {}
+    self._RegisterPseudoKind(KindPseudoKind(self))
+    self._RegisterPseudoKind(NamespacePseudoKind(self))
+
     self.Read()
+
+  def _RegisterPseudoKind(self, kind):
+    self.__pseudo_kinds[kind.name] = kind
 
   def Clear(self):
     """ Clears the datastore by deleting all currently stored entities and
@@ -671,8 +832,8 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
     if not filename or filename == '/dev/null' or not obj:
       return
 
-    tmpfile = openfile(os.tempnam(os.path.dirname(filename)), 'wb')
-
+    descriptor, tmp_filename = tempfile.mkstemp(dir=os.path.dirname(filename))
+    tmpfile = openfile(tmp_filename, 'wb')
     pickler = pickle.Pickler(tmpfile, protocol=1)
     pickler.fast = True
     pickler.dump(obj)
@@ -682,13 +843,13 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
     self.__file_lock.acquire()
     try:
       try:
-        os.rename(tmpfile.name, filename)
+        os.rename(tmp_filename, filename)
       except OSError:
         try:
           os.remove(filename)
         except:
           pass
-        os.rename(tmpfile.name, filename)
+        os.rename(tmp_filename, filename)
     finally:
       self.__file_lock.release()
 
@@ -714,6 +875,17 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
     return dict((pb, times) for pb, times in self.__query_history.items()
                 if pb.app() == self.__app_id)
 
+  def _GetSchemaCache(self, kind, usekey):
+    if kind in self.__schema_cache and usekey in self.__schema_cache[kind]:
+      return self.__schema_cache[kind][usekey]
+    else:
+      return None
+
+  def _SetSchemaCache(self, kind, usekey, value):
+    if kind not in self.__schema_cache:
+      self.__schema_cache[kind] = {}
+    self.__schema_cache[kind][usekey] = value
+
   def _Dynamic_Put(self, put_request, put_response):
     if put_request.has_transaction():
       self.__ValidateTransaction(put_request.transaction())
@@ -726,11 +898,7 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
       clone.CopyFrom(entity)
 
       for property in clone.property_list() + clone.raw_property_list():
-        if property.value().has_uservalue():
-          uid = md5.new(property.value().uservalue().email().lower()).digest()
-          uid = '1' + ''.join(['%02d' % ord(x) for x in uid])[:20]
-          property.mutable_value().mutable_uservalue().set_obfuscated_gaiaid(
-              uid)
+        datastore_stub_util.FillUser(property)
 
       clones.append(clone)
 
@@ -817,10 +985,6 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
   def _Dynamic_RunQuery(self, query, query_result):
     if query.has_transaction():
       self.__ValidateTransaction(query.transaction())
-      if not query.has_ancestor():
-        raise apiproxy_errors.ApplicationError(
-          datastore_pb.Error.BAD_REQUEST,
-          'Only ancestor queries are allowed inside transactions.')
       entities = self.__tx_snapshot
     else:
       entities = self.__entities
@@ -829,20 +993,18 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
     namespace = query.name_space()
     self.__ValidateAppId(app_id)
 
-    num_components = len(query.filter_list()) + len(query.order_list())
-    if query.has_ancestor():
-      num_components += 1
-    if num_components > _MAX_QUERY_COMPONENTS:
-      raise apiproxy_errors.ApplicationError(
-          datastore_pb.Error.BAD_REQUEST,
-          ('query is too large. may not have more than %s filters'
-           ' + sort orders ancestor total' % _MAX_QUERY_COMPONENTS))
-
     (filters, orders) = datastore_index.Normalize(query.filter_list(),
                                                   query.order_list())
+    datastore_stub_util.ValidateQuery(query, filters, orders,
+        _MAX_QUERY_COMPONENTS)
+    datastore_stub_util.FillUsersInQuery(filters)
 
-    if self.__require_indexes:
-      required, kind, ancestor, props, num_eq_filters = datastore_index.CompositeIndexFojQuery(query)
+    pseudo_kind = None
+    if query.has_kind() and query.kind() in self.__pseudo_kinds:
+      pseudo_kind = self.__pseudo_kinds[query.kind()]
+
+    if not pseudo_kind and self.__require_indexes:
+      required, kind, ancestor, props, num_eq_filters = datastore_index.CompositeIndexForQuery(query)
       if required:
         required_key = kind, ancestor, props
         indexes = self.__indexes.get(app_id)
@@ -875,7 +1037,10 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
       query.set_app(app_id)
       datastore_types.SetNamespace(query, namespace)
       encoded = datastore_types.EncodeAppIdNamespace(app_id, namespace)
-      if query.has_kind():
+      if pseudo_kind:
+        (results, filters, orders) = pseudo_kind.Query(entities, query,
+                                                       filters, orders)
+      elif query.has_kind():
         results = entities[encoded, query.kind()].values()
         results = [entity.native for entity in results]
       else:
@@ -1169,8 +1334,9 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
         continue
 
       app_kind = (app_namespace_str, kind)
-      if app_kind in self.__schema_cache:
-        kinds.append(self.__schema_cache[app_kind])
+      kind_pb = self._GetSchemaCache(app_kind, "GetSchema")
+      if kind_pb:
+        kinds.append(kind_pb)
         continue
 
       kind_pb = entity_pb.EntityProto()
@@ -1218,7 +1384,7 @@ class DatastoreFileStub(apiproxy_stub.APIProxyStub):
         prop_pb.mutable_value().CopyFrom(value_pb)
 
       kinds.append(kind_pb)
-      self.__schema_cache[app_kind] = kind_pb
+      self._SetSchemaCache(app_kind, "GetSchema", kind_pb)
 
     for kind_pb in kinds:
       kind = schema.add_kind()

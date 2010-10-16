@@ -1101,6 +1101,17 @@ class MapperItem(KeyRangeItem):
     return transfer_time
 
 
+def IncrementId(high_id_key):
+  """Increment unique id counter associated with high_id_key beyond high_id_key.
+
+  Args:
+    high_id_key: A key with a full path to the desired kind and id
+        value to which to increment the unique id counter beyond.
+  """
+  unused_start, end = datastore.AllocateIds(high_id_key, max=high_id_key.id())
+  assert end >= high_id_key.id()
+
+
 class RequestManager(object):
   """A class which wraps a connection to the server."""
 
@@ -1218,11 +1229,8 @@ class RequestManager(object):
       kind: The string name of a kind.
       high_id: The int value to which to increment the unique id counter.
     """
-    model_key = datastore.Key.from_path(*(ancestor_path + [kind, 1]))
-    start, end = datastore.AllocateIds(model_key, 1)
-    if end < high_id:
-      start, end = datastore.AllocateIds(model_key, high_id - end)
-    assert end >= high_id
+    high_id_key = datastore.Key.from_path(*(ancestor_path + [kind, high_id]))
+    IncrementId(high_id_key)
 
   def GetSchemaKinds(self):
     """Returns the list of kinds for this app."""
@@ -3519,7 +3527,8 @@ def LoadYamlConfig(config_file_name):
   Args:
     config_file_name: The name of the configuration file.
   """
-  (loaders, exporters) = bulkloader_config.load_config(config_file_name)
+  (loaders, exporters) = bulkloader_config.load_config(config_file_name,
+                                                       increment_id=IncrementId)
   for cls in loaders:
     Loader.RegisterLoader(cls())
   for cls in exporters:

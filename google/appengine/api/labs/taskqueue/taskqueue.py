@@ -582,6 +582,8 @@ class Queue(object):
     self.__name = name
     self.__url = '%s/%s' % (_DEFAULT_QUEUE_PATH, self.__name)
 
+    self._app = None
+
   def add(self, task, transactional=False):
     """Adds a Task or list of Tasks to this Queue.
 
@@ -706,6 +708,9 @@ class Queue(object):
       header = task_request.add_header()
       header.set_key(key)
       header.set_value(value)
+
+    if self._app:
+      task_request.set_app_id(self._app)
 
     if transactional:
       from google.appengine.api import datastore
