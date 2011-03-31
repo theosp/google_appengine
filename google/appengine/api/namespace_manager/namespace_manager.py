@@ -15,12 +15,19 @@
 # limitations under the License.
 #
 
+
+
+
 """Control the namespacing system used by various APIs.
 
 A namespace may be specified in various API calls exemplified
 by the datastore and memcache interfaces.  The default can be
 specified using this module.
 """
+
+
+
+
 
 
 
@@ -39,8 +46,15 @@ __all__ = ['BadValueError',
           ]
 
 
+
+
 _ENV_DEFAULT_NAMESPACE = 'HTTP_X_APPENGINE_DEFAULT_NAMESPACE'
 _ENV_CURRENT_NAMESPACE = 'HTTP_X_APPENGINE_CURRENT_NAMESPACE'
+
+
+
+
+
 
 _NAMESPACE_MAX_LENGTH = 100
 _NAMESPACE_PATTERN = r'^[0-9A-Za-z._-]{0,%s}$' % _NAMESPACE_MAX_LENGTH

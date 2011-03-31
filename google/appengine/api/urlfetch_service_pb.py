@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -23,6 +25,7 @@ __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
                    unusednames=printElemNumber,debug_strs no-special"""
 
 class URLFetchServiceError(ProtocolBuffer.ProtocolMessage):
+
 
   OK           =    0
   INVALID_URL  =    1
@@ -82,6 +85,8 @@ class URLFetchServiceError(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -102,6 +107,7 @@ class URLFetchServiceError(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -210,6 +216,8 @@ class URLFetchRequest_Header(ProtocolBuffer.ProtocolMessage):
       if tt == 42:
         self.set_value(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -221,6 +229,7 @@ class URLFetchRequest_Header(ProtocolBuffer.ProtocolMessage):
     return res
 
 class URLFetchRequest(ProtocolBuffer.ProtocolMessage):
+
 
   GET          =    1
   POST         =    2
@@ -501,6 +510,8 @@ class URLFetchRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 72:
         self.set_mustvalidateservercertificate(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -562,6 +573,7 @@ class URLFetchRequest(ProtocolBuffer.ProtocolMessage):
     8: ProtocolBuffer.Encoder.DOUBLE,
     9: ProtocolBuffer.Encoder.NUMERIC,
   }, 9, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -670,6 +682,8 @@ class URLFetchResponse_Header(ProtocolBuffer.ProtocolMessage):
       if tt == 42:
         self.set_value(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1028,6 +1042,8 @@ class URLFetchResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 96:
         self.set_apibytesreceived(d.getVarInt64())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1101,6 +1117,7 @@ class URLFetchResponse(ProtocolBuffer.ProtocolMessage):
     11: ProtocolBuffer.Encoder.NUMERIC,
     12: ProtocolBuffer.Encoder.NUMERIC,
   }, 12, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

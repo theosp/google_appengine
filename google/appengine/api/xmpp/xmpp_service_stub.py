@@ -15,7 +15,14 @@
 # limitations under the License.
 #
 
+
+
+
 """Stub version of the XMPP API, writes messages to logs."""
+
+
+
+
 
 
 
@@ -135,6 +142,7 @@ class XmppServiceStub(apiproxy_stub.APIProxyStub):
     appid = os.environ.get('APPLICATION_ID', '')
     if requested == None or requested == '':
       return appid + '@appspot.com/bot'
+
 
     node, domain, resource = ('', '', '')
     at = requested.find('@')

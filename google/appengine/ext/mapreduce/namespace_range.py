@@ -15,6 +15,21 @@
 # limitations under the License.
 #
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 """Represents a lexographic range of namespaces."""
 
 
@@ -22,6 +37,7 @@ import itertools
 import string
 
 from google.appengine.api import datastore
+from google.appengine.ext import db
 from google.appengine.ext.db import metadata
 
 NAMESPACE_CHARACTERS = ''.join(sorted(string.digits +
@@ -44,6 +60,26 @@ def _setup_constants(alphabet=NAMESPACE_CHARACTERS,
   NAMESPACE_CHARACTERS = alphabet
   MAX_NAMESPACE_LENGTH = max_length
   MAX_NAMESPACE = NAMESPACE_CHARACTERS[-1] * MAX_NAMESPACE_LENGTH
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   _LEX_DISTANCE = [1]
   for i in range(1, MAX_NAMESPACE_LENGTH):
@@ -107,6 +143,26 @@ def _namespace_to_ord(namespace):
           NAMESPACE_CHARACTERS.index(c)
           + 1)
   return n
+
+
+def _key_for_namespace(namespace, app):
+  """Return the __namespace__ key for a namespace.
+
+  Args:
+    namespace: The namespace whose key is requested.
+    app: The id of the application that the key belongs to.
+
+  Returns:
+    A db.Key representing the namespace.
+  """
+  if namespace:
+    return db.Key.from_path(metadata.Namespace.KIND_NAME,
+                            namespace,
+                            _app=app)
+  else:
+    return db.Key.from_path(metadata.Namespace.KIND_NAME,
+                            metadata.Namespace.EMPTY_NAMESPACE_ID,
+                            _app=app)
 
 
 class NamespaceRange(object):
@@ -224,10 +280,10 @@ class NamespaceRange(object):
       the NamespaceRange.
     """
     filters = {}
-    filters['__key__ >= '] = metadata.Namespace.key_for_namespace(
-        self.namespace_start)
-    filters['__key__ <= '] = metadata.Namespace.key_for_namespace(
-        self.namespace_end)
+    filters['__key__ >= '] = _key_for_namespace(
+        self.namespace_start, self.app)
+    filters['__key__ <= '] = _key_for_namespace(
+        self.namespace_end, self.app)
 
     return datastore.Query('__namespace__',
                            filters=filters,
@@ -249,7 +305,9 @@ class NamespaceRange(object):
       return None
 
     namespace_after_key = namespaces_after_key[0].name() or ''
-    return NamespaceRange(namespace_after_key, self.namespace_end)
+    return NamespaceRange(namespace_after_key,
+                          self.namespace_end,
+                          _app=self.app)
 
   def to_json_object(self):
     """Returns a dict representation that can be serialized to JSON."""
@@ -266,9 +324,13 @@ class NamespaceRange(object):
                json['namespace_end'],
                _app=json.get('app'))
 
+
+
+
   @classmethod
   def split(cls,
             n,
+            contiguous,
             can_query=itertools.chain(itertools.repeat(True, 50),
                                       itertools.repeat(False)).next,
             _app=None):
@@ -277,6 +339,11 @@ class NamespaceRange(object):
     Args:
       n: The maximum number of NamespaceRanges to return. Fewer than n
           namespaces may be returned.
+      contiguous: If True then the returned NamespaceRanges will cover the
+          entire space of possible namespaces (i.e. from MIN_NAMESPACE to
+          MAX_NAMESPACE) without gaps. If False then the returned
+          NamespaceRanges may exclude namespaces that don't appear in the
+          datastore.
       can_query: A function that returns True if split() can query the datastore
           to generate more fair namespace range splits, and False otherwise.
           If not set then split() is allowed to make 50 datastore queries.
@@ -296,7 +363,10 @@ class NamespaceRange(object):
     if can_query():
       ns_range = ns_range.normalized_start()
       if ns_range is None:
-        return []
+        if contiguous:
+          return [NamespaceRange(_app=_app)]
+        else:
+          return []
     ranges = [ns_range]
 
     singles = []
@@ -311,5 +381,31 @@ class NamespaceRange(object):
         if right is not None:
           ranges.append(right)
         ranges.append(left)
-    return sorted(singles + ranges,
-                  key=lambda ns_range: ns_range.namespace_start)
+    ns_ranges = sorted(singles + ranges,
+                       key=lambda ns_range: ns_range.namespace_start)
+
+    if contiguous:
+      if not ns_ranges:
+
+
+        return [NamespaceRange(_app=_app)]
+
+      continuous_ns_ranges = []
+      for i in range(len(ns_ranges)):
+        if i == 0:
+          namespace_start = MIN_NAMESPACE
+        else:
+          namespace_start = ns_ranges[i].namespace_start
+
+        if i == len(ns_ranges) - 1:
+          namespace_end = MAX_NAMESPACE
+        else:
+          namespace_end = _ord_to_namespace(
+              _namespace_to_ord(ns_ranges[i+1].namespace_start) - 1)
+
+        continuous_ns_ranges.append(NamespaceRange(namespace_start,
+                                                   namespace_end,
+                                                   _app=_app))
+      return continuous_ns_ranges
+    else:
+      return ns_ranges

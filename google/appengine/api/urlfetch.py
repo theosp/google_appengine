@@ -15,11 +15,18 @@
 # limitations under the License.
 #
 
+
+
+
 """URL downloading API.
 
 Methods defined in this module:
    Fetch(): fetchs a given URL using an HTTP GET or POST
 """
+
+
+
+
 
 
 
@@ -35,7 +42,10 @@ from google.appengine.api import urlfetch_service_pb
 from google.appengine.api.urlfetch_errors import *
 from google.appengine.runtime import apiproxy_errors
 
+
+
 MAX_REDIRECTS = 5
+
 
 GET = 1
 POST = 2
@@ -75,6 +85,7 @@ class _CaselessDict(UserDict.IterableUserDict):
       item: Item to store.
     """
     caseless_key = key.lower()
+
     if caseless_key in self.caseless_keys:
       del self.data[self.caseless_keys[caseless_key]]
     self.caseless_keys[caseless_key] = key
@@ -144,9 +155,13 @@ class _CaselessDict(UserDict.IterableUserDict):
       try:
         keys = dict.keys()
       except AttributeError:
+
         for k, v in dict:
           self[k] = v
       else:
+
+
+
         for k in keys:
           self[k] = dict[k]
     if kwargs:
@@ -279,12 +294,18 @@ def make_fetch_call(rpc, url, payload=None, method=GET, headers={},
   elif method == DELETE:
     request.set_method(urlfetch_service_pb.URLFetchRequest.DELETE)
 
+
   if payload and (method == POST or method == PUT):
     request.set_payload(payload)
+
 
   for key, value in headers.iteritems():
     header_proto = request.add_header()
     header_proto.set_key(key)
+
+
+
+
     header_proto.set_value(str(value))
 
   request.set_followredirects(follow_redirects)
@@ -293,6 +314,8 @@ def make_fetch_call(rpc, url, payload=None, method=GET, headers={},
 
   if rpc.deadline is not None:
     request.set_deadline(rpc.deadline)
+
+
 
   rpc.make_call('Fetch', request, response, _get_fetch_result, allow_truncated)
 

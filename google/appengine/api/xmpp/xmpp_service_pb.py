@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -27,6 +29,7 @@ import google.appengine.api.api_base_pb
 from google.appengine.api.channel.channel_service_pb import *
 import google.appengine.api.channel.channel_service_pb
 class XmppServiceError(ProtocolBuffer.ProtocolMessage):
+
 
   UNSPECIFIED_ERROR =    1
   INVALID_JID  =    2
@@ -86,6 +89,8 @@ class XmppServiceError(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -106,6 +111,7 @@ class XmppServiceError(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -208,6 +214,8 @@ class PresenceRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_from_jid(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -237,9 +245,11 @@ class PresenceRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class PresenceResponse(ProtocolBuffer.ProtocolMessage):
+
 
   NORMAL       =    0
   AWAY         =    1
@@ -354,6 +364,8 @@ class PresenceResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 16:
         self.set_presence(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -382,6 +394,7 @@ class PresenceResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.NUMERIC,
     2: ProtocolBuffer.Encoder.NUMERIC,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -578,6 +591,8 @@ class XmppMessageRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 42:
         self.set_from_jid(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -624,9 +639,11 @@ class XmppMessageRequest(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class XmppMessageResponse(ProtocolBuffer.ProtocolMessage):
+
 
   NO_ERROR     =    0
   INVALID_JID  =    1
@@ -708,6 +725,8 @@ class XmppMessageResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 8:
         self.add_status(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -737,6 +756,7 @@ class XmppMessageResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.NUMERIC,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -929,6 +949,8 @@ class XmppSendPresenceRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 42:
         self.set_from_jid(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -970,6 +992,7 @@ class XmppSendPresenceRequest(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class XmppSendPresenceResponse(ProtocolBuffer.ProtocolMessage):
@@ -1010,6 +1033,8 @@ class XmppSendPresenceResponse(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1030,6 +1055,7 @@ class XmppSendPresenceResponse(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1132,6 +1158,8 @@ class XmppInviteRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_from_jid(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1160,6 +1188,7 @@ class XmppInviteRequest(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1201,6 +1230,8 @@ class XmppInviteResponse(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1221,6 +1252,7 @@ class XmppInviteResponse(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

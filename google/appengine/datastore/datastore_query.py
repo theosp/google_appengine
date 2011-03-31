@@ -15,6 +15,9 @@
 # limitations under the License.
 #
 
+
+
+
 """A thin wrapper around datastore query RPC calls.
 
 This provides wrappers around the internal only datastore_pb library and is
@@ -25,6 +28,11 @@ RPC syntax can change without affecting client libraries.
 Any class, function, field or argument starting with an '_' is for INTERNAL use
 only and should not be used by developers!
 """
+
+
+
+
+
 
 
 __all__ = ['Batch',
@@ -116,6 +124,7 @@ class FilterPredicate(_BaseComponent):
     return [self._to_pb()]
 
   def __eq__(self, other):
+
     if self.__class__ is other.__class__:
       return super(FilterPredicate, self).__eq__(other)
 
@@ -210,6 +219,8 @@ class CompositeFilter(FilterPredicate):
     self._filters = []
     for f in filters:
       if isinstance(f, CompositeFilter) and f._op == self._op:
+
+
         self._filters.extend(f._filters)
       elif isinstance(f, FilterPredicate):
         self._filters.append(f)
@@ -220,6 +231,9 @@ class CompositeFilter(FilterPredicate):
 
   def _to_pbs(self):
     """Returns the internal only pb representation."""
+
+
+
     return [f._to_pb() for f in self._filters]
 
 
@@ -400,6 +414,7 @@ class QueryOptions(FetchOptions):
   but in that case some options will be ignored, see below for details.
   """
 
+
   ORDER_FIRST = datastore_pb.Query.ORDER_FIRST
   ANCESTOR_FIRST = datastore_pb.Query.ANCESTOR_FIRST
   FILTER_FIRST = datastore_pb.Query.FILTER_FIRST
@@ -507,6 +522,8 @@ class Cursor(_BaseComponent):
     query. If such a Cursor is used as an end_cursor no results will ever be
     returned.
     """
+
+
     super(Cursor, self).__init__()
     if _cursor_pb is not None:
       if not isinstance(_cursor_pb, datastore_pb.CompiledCursor):
@@ -544,6 +561,12 @@ class Cursor(_BaseComponent):
       raise datastore_errors.BadValueError(
           'Invalid cursor %s. Details: %s' % (cursor, e))
     except Exception, e:
+
+
+
+
+
+
       if e.__class__.__name__ == 'ProtocolBufferDecodeError':
         raise datastore_errors.BadValueError(
             'Invalid cursor %s. Details: %s' % (cursor, e))
@@ -581,6 +604,8 @@ class Cursor(_BaseComponent):
           'cursor argument should be str or unicode (%r)' % (cursor,))
 
     try:
+
+
       decoded_bytes = base64.b64decode(str(cursor).replace('-', '+').replace('_', '/'))
     except (ValueError, TypeError), e:
       raise datastore_errors.BadValueError(
@@ -710,6 +735,8 @@ class Query(_BaseComponent):
           'conn should be a datastore_rpc.BaseConnection (%r)' % (conn,))
 
     if not isinstance(query_options, QueryOptions):
+
+
       query_options = QueryOptions(config=query_options)
 
     start_cursor = query_options.start_cursor
@@ -728,6 +755,7 @@ class Query(_BaseComponent):
     """Returns the internal only pb representation."""
     pb = datastore_pb.Query()
 
+
     pb.set_app(self.__app.encode('utf-8'))
     datastore_types.SetNamespace(pb, self.__namespace)
     if self.__kind is not None:
@@ -735,13 +763,16 @@ class Query(_BaseComponent):
     if self.__ancestor:
       pb.mutable_ancestor().CopyFrom(self.__ancestor)
 
+
     if self.__filter_predicate:
       for f in self.__filter_predicate._to_pbs():
         pb.add_filter().CopyFrom(f)
 
+
     if self.__order:
       for order in self.__order._to_pbs():
         pb.add_order().CopyFrom(order)
+
 
     if QueryOptions.keys_only(query_options, conn.config):
       pb.set_keys_only(True)
@@ -759,15 +790,19 @@ class Query(_BaseComponent):
     if count is not None:
       pb.set_count(count)
 
+
     if query_options.offset:
       pb.set_offset(query_options.offset)
+
 
     if query_options.start_cursor is not None:
       pb.mutable_compiled_cursor().CopyFrom(query_options.start_cursor._to_pb())
 
+
     if query_options.end_cursor is not None:
       pb.mutable_end_compiled_cursor().CopyFrom(
           query_options.end_cursor._to_pb())
+
 
     if ((query_options.hint == QueryOptions.ORDER_FIRST and self.__order) or
         (query_options.hint == QueryOptions.ANCESTOR_FIRST and
@@ -775,6 +810,7 @@ class Query(_BaseComponent):
         (query_options.hint == QueryOptions.FILTER_FIRST and pb.
          filter_size() > 0)):
       pb.set_hint(query_options.hint)
+
 
     conn._set_request_read_policy(pb, query_options)
     conn._set_request_transaction(pb)
@@ -835,6 +871,8 @@ class Batch(object):
       conn: A datastore_rpc.Connection to use.
       start_cursor: Optional cursor pointing before this batch.
     """
+
+
     self.__query = query
     self.__conn = conn
     self.__query_options = query_options
@@ -951,8 +989,10 @@ class Batch(object):
 
     req = self._to_pb(fetch_options)
 
+
     next_batch = Batch(self.__query_options, self.__query, self.__conn,
                        self.__end_cursor, self._compiled_query)
+
     config = datastore_rpc.Configuration.merge(self.__query_options,
                                                fetch_options)
     return next_batch._make_query_result_rpc_call(
@@ -1012,6 +1052,7 @@ class Batch(object):
     try:
       self.__conn.check_rpc_success(rpc)
     except datastore_errors.NeedIndexError, exc:
+
       if isinstance(rpc.request, datastore_pb.Query):
         yaml = datastore_index.IndexYamlForQuery(
             *datastore_index.CompositeIndexForQuery(rpc.request)[1:-1])
@@ -1028,6 +1069,8 @@ class Batch(object):
         for result in query_result.result_list()]
     if query_result.has_compiled_query():
       self._compiled_query = query_result.compiled_query
+
+
 
     if (query_result.more_results() and
         (isinstance(rpc.request, datastore_pb.Query) or
@@ -1102,17 +1145,21 @@ class Batcher(object):
     if not self.__next_batch:
       raise StopIteration
 
+
     batch = self.__next_batch.get_result()
     self.__next_batch = None
     self.__skipped_results += batch.skipped_results
+
 
     needed_results = min_batch_size - len(batch.results)
     while (batch.more_results and
            (self.__skipped_results < self.__initial_offset or
             needed_results > 0)):
       if batch.query_options.batch_size:
+
         batch_size = max(batch.query_options.batch_size, needed_results)
       elif needed_results:
+
         batch_size = needed_results
       else:
         batch_size = None
@@ -1122,6 +1169,9 @@ class Batcher(object):
       self.__skipped_results += next_batch.skipped_results
       needed_results = max(0, needed_results - len(next_batch.results))
       batch._extend(next_batch)
+
+
+
 
     self.__next_batch = batch.next_batch_async()
     return batch
@@ -1165,6 +1215,7 @@ class ResultsIterator(object):
 
   def cursor(self):
     """Returns a cursor that points just after the last result returned."""
+
     if not self.__current_batch:
       self.__current_batch = self.__batcher.next()
       self.__current_pos = 0
@@ -1180,12 +1231,16 @@ class ResultsIterator(object):
       self.__current_pos = 0
     return self.__current_batch._compiled_query
 
+
   def next(self):
     """Returns the next query result."""
     if (not self.__current_batch or
         self.__current_pos >= len(self.__current_batch.results)):
+
       next_batch = self.__batcher.next()
       if not next_batch:
+
+
         raise StopIteration
 
       self.__current_pos = 0

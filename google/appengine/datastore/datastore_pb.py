@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -134,6 +136,8 @@ class Transaction(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_app(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -163,9 +167,11 @@ class Transaction(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class Query_Filter(ProtocolBuffer.ProtocolMessage):
+
 
   LESS_THAN    =    1
   LESS_THAN_OR_EQUAL =    2
@@ -299,6 +305,8 @@ class Query_Filter(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_property().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -317,6 +325,7 @@ class Query_Filter(ProtocolBuffer.ProtocolMessage):
     return res
 
 class Query_Order(ProtocolBuffer.ProtocolMessage):
+
 
   ASCENDING    =    1
   DESCENDING   =    2
@@ -428,6 +437,8 @@ class Query_Order(ProtocolBuffer.ProtocolMessage):
       if tt == 88:
         self.set_direction(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -439,6 +450,7 @@ class Query_Order(ProtocolBuffer.ProtocolMessage):
     return res
 
 class Query(ProtocolBuffer.ProtocolMessage):
+
 
   ORDER_FIRST  =    1
   ANCESTOR_FIRST =    2
@@ -548,6 +560,7 @@ class Query(ProtocolBuffer.ProtocolMessage):
   def mutable_ancestor(self): self.has_ancestor_ = 1; return self.ancestor()
 
   def clear_ancestor(self):
+
     if self.has_ancestor_:
       self.has_ancestor_ = 0;
       if self.ancestor_ is not None: self.ancestor_.Clear()
@@ -663,6 +676,7 @@ class Query(ProtocolBuffer.ProtocolMessage):
   def mutable_compiled_cursor(self): self.has_compiled_cursor_ = 1; return self.compiled_cursor()
 
   def clear_compiled_cursor(self):
+
     if self.has_compiled_cursor_:
       self.has_compiled_cursor_ = 0;
       if self.compiled_cursor_ is not None: self.compiled_cursor_.Clear()
@@ -681,6 +695,7 @@ class Query(ProtocolBuffer.ProtocolMessage):
   def mutable_end_compiled_cursor(self): self.has_end_compiled_cursor_ = 1; return self.end_compiled_cursor()
 
   def clear_end_compiled_cursor(self):
+
     if self.has_end_compiled_cursor_:
       self.has_end_compiled_cursor_ = 0;
       if self.end_compiled_cursor_ is not None: self.end_compiled_cursor_.Clear()
@@ -741,6 +756,7 @@ class Query(ProtocolBuffer.ProtocolMessage):
   def mutable_transaction(self): self.has_transaction_ = 1; return self.transaction()
 
   def clear_transaction(self):
+
     if self.has_transaction_:
       self.has_transaction_ = 0;
       if self.transaction_ is not None: self.transaction_.Clear()
@@ -1196,6 +1212,8 @@ class Query(ProtocolBuffer.ProtocolMessage):
       if tt == 256:
         self.set_strong(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1345,6 +1363,7 @@ class Query(ProtocolBuffer.ProtocolMessage):
     31: ProtocolBuffer.Encoder.STRING,
     32: ProtocolBuffer.Encoder.NUMERIC,
   }, 32, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1563,6 +1582,8 @@ class CompiledQuery_PrimaryScan(ProtocolBuffer.ProtocolMessage):
       if tt == 152:
         self.set_end_unapplied_log_timestamp_us(d.getVarInt64())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1580,6 +1601,8 @@ class CompiledQuery_PrimaryScan(ProtocolBuffer.ProtocolMessage):
 class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
   has_index_name_ = 0
   index_name_ = ""
+  has_value_prefix_ = 0
+  value_prefix_ = 0
 
   def __init__(self, contents=None):
     self.prefix_value_ = []
@@ -1613,11 +1636,25 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
   def clear_prefix_value(self):
     self.prefix_value_ = []
 
+  def value_prefix(self): return self.value_prefix_
+
+  def set_value_prefix(self, x):
+    self.has_value_prefix_ = 1
+    self.value_prefix_ = x
+
+  def clear_value_prefix(self):
+    if self.has_value_prefix_:
+      self.has_value_prefix_ = 0
+      self.value_prefix_ = 0
+
+  def has_value_prefix(self): return self.has_value_prefix_
+
 
   def MergeFrom(self, x):
     assert x is not self
     if (x.has_index_name()): self.set_index_name(x.index_name())
     for i in xrange(x.prefix_value_size()): self.add_prefix_value(x.prefix_value(i))
+    if (x.has_value_prefix()): self.set_value_prefix(x.value_prefix())
 
   def Equals(self, x):
     if x is self: return 1
@@ -1626,6 +1663,8 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
     if len(self.prefix_value_) != len(x.prefix_value_): return 0
     for e1, e2 in zip(self.prefix_value_, x.prefix_value_):
       if e1 != e2: return 0
+    if self.has_value_prefix_ != x.has_value_prefix_: return 0
+    if self.has_value_prefix_ and self.value_prefix_ != x.value_prefix_: return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -1641,6 +1680,7 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
     n += self.lengthString(len(self.index_name_))
     n += 1 * len(self.prefix_value_)
     for i in xrange(len(self.prefix_value_)): n += self.lengthString(len(self.prefix_value_[i]))
+    if (self.has_value_prefix_): n += 3
     return n + 1
 
   def ByteSizePartial(self):
@@ -1650,11 +1690,13 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
       n += self.lengthString(len(self.index_name_))
     n += 1 * len(self.prefix_value_)
     for i in xrange(len(self.prefix_value_)): n += self.lengthString(len(self.prefix_value_[i]))
+    if (self.has_value_prefix_): n += 3
     return n
 
   def Clear(self):
     self.clear_index_name()
     self.clear_prefix_value()
+    self.clear_value_prefix()
 
   def OutputUnchecked(self, out):
     out.putVarInt32(66)
@@ -1662,6 +1704,9 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
     for i in xrange(len(self.prefix_value_)):
       out.putVarInt32(74)
       out.putPrefixedString(self.prefix_value_[i])
+    if (self.has_value_prefix_):
+      out.putVarInt32(160)
+      out.putBoolean(self.value_prefix_)
 
   def OutputPartial(self, out):
     if (self.has_index_name_):
@@ -1670,6 +1715,9 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
     for i in xrange(len(self.prefix_value_)):
       out.putVarInt32(74)
       out.putPrefixedString(self.prefix_value_[i])
+    if (self.has_value_prefix_):
+      out.putVarInt32(160)
+      out.putBoolean(self.value_prefix_)
 
   def TryMerge(self, d):
     while 1:
@@ -1681,6 +1729,11 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
       if tt == 74:
         self.add_prefix_value(d.getPrefixedString())
         continue
+      if tt == 160:
+        self.set_value_prefix(d.getBoolean())
+        continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1694,6 +1747,7 @@ class CompiledQuery_MergeJoinScan(ProtocolBuffer.ProtocolMessage):
       if printElemNumber: elm="(%d)" % cnt
       res+=prefix+("prefix_value%s: %s\n" % (elm, self.DebugFormatString(e)))
       cnt+=1
+    if self.has_value_prefix_: res+=prefix+("value_prefix: %s\n" % self.DebugFormatBool(self.value_prefix_))
     return res
 
 class CompiledQuery_EntityFilter(ProtocolBuffer.ProtocolMessage):
@@ -1746,6 +1800,7 @@ class CompiledQuery_EntityFilter(ProtocolBuffer.ProtocolMessage):
   def mutable_ancestor(self): self.has_ancestor_ = 1; return self.ancestor()
 
   def clear_ancestor(self):
+
     if self.has_ancestor_:
       self.has_ancestor_ = 0;
       if self.ancestor_ is not None: self.ancestor_.Clear()
@@ -1833,6 +1888,8 @@ class CompiledQuery_EntityFilter(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_ancestor().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1939,6 +1996,7 @@ class CompiledQuery(ProtocolBuffer.ProtocolMessage):
   def mutable_entityfilter(self): self.has_entityfilter_ = 1; return self.entityfilter()
 
   def clear_entityfilter(self):
+
     if self.has_entityfilter_:
       self.has_entityfilter_ = 0;
       if self.entityfilter_ is not None: self.entityfilter_.Clear()
@@ -2085,6 +2143,8 @@ class CompiledQuery(ProtocolBuffer.ProtocolMessage):
       if tt == 107:
         self.mutable_entityfilter().TryMerge(d)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2126,6 +2186,7 @@ class CompiledQuery(ProtocolBuffer.ProtocolMessage):
   kMergeJoinScanGroup = 7
   kMergeJoinScanindex_name = 8
   kMergeJoinScanprefix_value = 9
+  kMergeJoinScanvalue_prefix = 20
   koffset = 10
   klimit = 11
   kkeys_only = 12
@@ -2153,7 +2214,8 @@ class CompiledQuery(ProtocolBuffer.ProtocolMessage):
     17: "kind",
     18: "ancestor",
     19: "end_unapplied_log_timestamp_us",
-  }, 19)
+    20: "value_prefix",
+  }, 20)
 
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
@@ -2174,7 +2236,9 @@ class CompiledQuery(ProtocolBuffer.ProtocolMessage):
     17: ProtocolBuffer.Encoder.STRING,
     18: ProtocolBuffer.Encoder.STRING,
     19: ProtocolBuffer.Encoder.NUMERIC,
-  }, 19, ProtocolBuffer.Encoder.MAX_TYPE)
+    20: ProtocolBuffer.Encoder.NUMERIC,
+  }, 20, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2273,6 +2337,8 @@ class CompiledCursor_Position(ProtocolBuffer.ProtocolMessage):
       if tt == 224:
         self.set_start_inclusive(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2386,6 +2452,8 @@ class CompiledCursor(ProtocolBuffer.ProtocolMessage):
       if tt == 19:
         self.add_position().TryMerge(d)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2427,6 +2495,7 @@ class CompiledCursor(ProtocolBuffer.ProtocolMessage):
     27: ProtocolBuffer.Encoder.STRING,
     28: ProtocolBuffer.Encoder.NUMERIC,
   }, 28, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2494,6 +2563,7 @@ class RunCompiledQueryRequest(ProtocolBuffer.ProtocolMessage):
   def mutable_original_query(self): self.has_original_query_ = 1; return self.original_query()
 
   def clear_original_query(self):
+
     if self.has_original_query_:
       self.has_original_query_ = 0;
       if self.original_query_ is not None: self.original_query_.Clear()
@@ -2667,6 +2737,8 @@ class RunCompiledQueryRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 50:
         self.set_name_space(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2717,6 +2789,7 @@ class RunCompiledQueryRequest(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.STRING,
     6: ProtocolBuffer.Encoder.STRING,
   }, 6, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2817,6 +2890,8 @@ class Cursor(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_app(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2846,9 +2921,11 @@ class Cursor(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class Error(ProtocolBuffer.ProtocolMessage):
+
 
   BAD_REQUEST  =    1
   CONCURRENT_TRANSACTION =    2
@@ -2914,6 +2991,8 @@ class Error(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2934,6 +3013,7 @@ class Error(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -3091,6 +3171,8 @@ class Cost(ProtocolBuffer.ProtocolMessage):
       if tt == 32:
         self.set_entity_write_bytes(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3127,6 +3209,7 @@ class Cost(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.NUMERIC,
     4: ProtocolBuffer.Encoder.NUMERIC,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -3171,6 +3254,7 @@ class GetRequest(ProtocolBuffer.ProtocolMessage):
   def mutable_transaction(self): self.has_transaction_ = 1; return self.transaction()
 
   def clear_transaction(self):
+
     if self.has_transaction_:
       self.has_transaction_ = 0;
       if self.transaction_ is not None: self.transaction_.Clear()
@@ -3308,6 +3392,8 @@ class GetRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 32:
         self.set_strong(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3355,6 +3441,7 @@ class GetRequest(ProtocolBuffer.ProtocolMessage):
     4: ProtocolBuffer.Encoder.NUMERIC,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class GetResponse_Entity(ProtocolBuffer.ProtocolMessage):
@@ -3377,6 +3464,7 @@ class GetResponse_Entity(ProtocolBuffer.ProtocolMessage):
   def mutable_entity(self): self.has_entity_ = 1; return self.entity()
 
   def clear_entity(self):
+
     if self.has_entity_:
       self.has_entity_ = 0;
       if self.entity_ is not None: self.entity_.Clear()
@@ -3434,6 +3522,8 @@ class GetResponse_Entity(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_entity().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3519,6 +3609,8 @@ class GetResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 11:
         self.add_entity().TryMerge(d)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3553,6 +3645,7 @@ class GetResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STARTGROUP,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -3598,6 +3691,7 @@ class PutRequest(ProtocolBuffer.ProtocolMessage):
   def mutable_transaction(self): self.has_transaction_ = 1; return self.transaction()
 
   def clear_transaction(self):
+
     if self.has_transaction_:
       self.has_transaction_ = 0;
       if self.transaction_ is not None: self.transaction_.Clear()
@@ -3776,6 +3870,8 @@ class PutRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 56:
         self.set_force(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3834,6 +3930,7 @@ class PutRequest(ProtocolBuffer.ProtocolMessage):
     7: ProtocolBuffer.Encoder.NUMERIC,
   }, 7, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class PutResponse(ProtocolBuffer.ProtocolMessage):
@@ -3873,6 +3970,7 @@ class PutResponse(ProtocolBuffer.ProtocolMessage):
   def mutable_cost(self): self.has_cost_ = 1; return self.cost()
 
   def clear_cost(self):
+
     if self.has_cost_:
       self.has_cost_ = 0;
       if self.cost_ is not None: self.cost_.Clear()
@@ -3954,6 +4052,8 @@ class PutResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_cost().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3992,6 +4092,7 @@ class PutResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -4113,6 +4214,8 @@ class TouchRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_composite_index().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -4156,6 +4259,7 @@ class TouchRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class TouchResponse(ProtocolBuffer.ProtocolMessage):
@@ -4178,6 +4282,7 @@ class TouchResponse(ProtocolBuffer.ProtocolMessage):
   def mutable_cost(self): self.has_cost_ = 1; return self.cost()
 
   def clear_cost(self):
+
     if self.has_cost_:
       self.has_cost_ = 0;
       if self.cost_ is not None: self.cost_.Clear()
@@ -4234,6 +4339,8 @@ class TouchResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_cost().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -4261,6 +4368,7 @@ class TouchResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -4305,6 +4413,7 @@ class DeleteRequest(ProtocolBuffer.ProtocolMessage):
   def mutable_transaction(self): self.has_transaction_ = 1; return self.transaction()
 
   def clear_transaction(self):
+
     if self.has_transaction_:
       self.has_transaction_ = 0;
       if self.transaction_ is not None: self.transaction_.Clear()
@@ -4442,6 +4551,8 @@ class DeleteRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 56:
         self.set_force(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -4489,6 +4600,7 @@ class DeleteRequest(ProtocolBuffer.ProtocolMessage):
     7: ProtocolBuffer.Encoder.NUMERIC,
   }, 7, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class DeleteResponse(ProtocolBuffer.ProtocolMessage):
@@ -4511,6 +4623,7 @@ class DeleteResponse(ProtocolBuffer.ProtocolMessage):
   def mutable_cost(self): self.has_cost_ = 1; return self.cost()
 
   def clear_cost(self):
+
     if self.has_cost_:
       self.has_cost_ = 0;
       if self.cost_ is not None: self.cost_.Clear()
@@ -4567,6 +4680,8 @@ class DeleteResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_cost().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -4594,6 +4709,7 @@ class DeleteResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -4757,6 +4873,8 @@ class NextRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 32:
         self.set_offset(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -4797,6 +4915,7 @@ class NextRequest(ProtocolBuffer.ProtocolMessage):
     4: ProtocolBuffer.Encoder.NUMERIC,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class QueryResult(ProtocolBuffer.ProtocolMessage):
@@ -4830,6 +4949,7 @@ class QueryResult(ProtocolBuffer.ProtocolMessage):
   def mutable_cursor(self): self.has_cursor_ = 1; return self.cursor()
 
   def clear_cursor(self):
+
     if self.has_cursor_:
       self.has_cursor_ = 0;
       if self.cursor_ is not None: self.cursor_.Clear()
@@ -4903,6 +5023,7 @@ class QueryResult(ProtocolBuffer.ProtocolMessage):
   def mutable_compiled_query(self): self.has_compiled_query_ = 1; return self.compiled_query()
 
   def clear_compiled_query(self):
+
     if self.has_compiled_query_:
       self.has_compiled_query_ = 0;
       if self.compiled_query_ is not None: self.compiled_query_.Clear()
@@ -4921,6 +5042,7 @@ class QueryResult(ProtocolBuffer.ProtocolMessage):
   def mutable_compiled_cursor(self): self.has_compiled_cursor_ = 1; return self.compiled_cursor()
 
   def clear_compiled_cursor(self):
+
     if self.has_compiled_cursor_:
       self.has_compiled_cursor_ = 0;
       if self.compiled_cursor_ is not None: self.compiled_cursor_.Clear()
@@ -5092,6 +5214,8 @@ class QueryResult(ProtocolBuffer.ProtocolMessage):
       if tt == 56:
         self.set_skipped_results(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -5156,6 +5280,7 @@ class QueryResult(ProtocolBuffer.ProtocolMessage):
     6: ProtocolBuffer.Encoder.STRING,
     7: ProtocolBuffer.Encoder.NUMERIC,
   }, 7, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -5348,6 +5473,8 @@ class GetSchemaRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 42:
         self.set_name_space(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -5388,6 +5515,7 @@ class GetSchemaRequest(ProtocolBuffer.ProtocolMessage):
     4: ProtocolBuffer.Encoder.NUMERIC,
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -5497,6 +5625,8 @@ class Schema(ProtocolBuffer.ProtocolMessage):
       if tt == 16:
         self.set_more_results(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -5532,6 +5662,7 @@ class Schema(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.NUMERIC,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -5664,6 +5795,8 @@ class GetNamespacesRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 26:
         self.set_end_namespace(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -5696,6 +5829,7 @@ class GetNamespacesRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -5797,6 +5931,8 @@ class GetNamespacesResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 16:
         self.set_more_results(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -5830,6 +5966,7 @@ class GetNamespacesResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.NUMERIC,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -5963,6 +6100,8 @@ class AllocateIdsRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 24:
         self.set_max(d.getVarInt64())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -5998,6 +6137,7 @@ class AllocateIdsRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.NUMERIC,
     3: ProtocolBuffer.Encoder.NUMERIC,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -6105,6 +6245,8 @@ class AllocateIdsResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 16:
         self.set_end(d.getVarInt64())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -6133,6 +6275,7 @@ class AllocateIdsResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.NUMERIC,
     2: ProtocolBuffer.Encoder.NUMERIC,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -6212,6 +6355,8 @@ class CompositeIndices(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_index().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -6243,6 +6388,7 @@ class CompositeIndices(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -6358,6 +6504,8 @@ class AddActionsRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_action().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -6396,6 +6544,7 @@ class AddActionsRequest(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -6437,6 +6586,8 @@ class AddActionsResponse(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -6457,6 +6608,7 @@ class AddActionsResponse(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -6529,6 +6681,8 @@ class BeginTransactionRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_app(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -6554,6 +6708,7 @@ class BeginTransactionRequest(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class CommitResponse(ProtocolBuffer.ProtocolMessage):
@@ -6576,6 +6731,7 @@ class CommitResponse(ProtocolBuffer.ProtocolMessage):
   def mutable_cost(self): self.has_cost_ = 1; return self.cost()
 
   def clear_cost(self):
+
     if self.has_cost_:
       self.has_cost_ = 0;
       if self.cost_ is not None: self.cost_.Clear()
@@ -6632,6 +6788,8 @@ class CommitResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_cost().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -6659,6 +6817,7 @@ class CommitResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -161,6 +163,8 @@ class IsEnabledRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 26:
         self.add_call(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -204,9 +208,11 @@ class IsEnabledRequest(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class IsEnabledResponse(ProtocolBuffer.ProtocolMessage):
+
 
   ENABLED      =    1
   SCHEDULED_FUTURE =    2
@@ -365,6 +371,8 @@ class IsEnabledResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_config().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -404,6 +412,7 @@ class IsEnabledResponse(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.NUMERIC,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

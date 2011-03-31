@@ -15,7 +15,30 @@
 # limitations under the License.
 #
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 """Defines input readers for MapReduce."""
+
+
+__all__ = ["Error", "BadReaderParamsError", "InputReader",
+           "AbstractDatastoreInputReader", "BlobstoreLineInputReader",
+           "BlobstoreZipInputReader", "BlobstoreZipLineInputReader",
+           "ConsistentKeyReader", "DatastoreEntityInputReader",
+           "DatastoreInputReader", "DatastoreKeyInputReader",
+           "NamespaceInputReader" ]
 
 
 
@@ -26,6 +49,7 @@ import zipfile
 
 from google.appengine.api import datastore
 from google.appengine.datastore import datastore_query
+
 try:
   from google.appengine.datastore import datastore_rpc
 except ImportError:
@@ -34,9 +58,9 @@ from google.appengine.ext import blobstore
 from google.appengine.ext import db
 from google.appengine.ext import key_range
 from google.appengine.ext.db import metadata
+from google.appengine.ext.mapreduce import model
 from google.appengine.ext.mapreduce import namespace_range
 from google.appengine.ext.mapreduce import util
-from google.appengine.ext.mapreduce.model import JsonMixin
 
 
 class Error(Exception):
@@ -47,7 +71,7 @@ class BadReaderParamsError(Error):
   """The input parameters to a reader were invalid."""
 
 
-class InputReader(JsonMixin):
+class InputReader(model.JsonMixin):
   """Abstract base class for input readers.
 
   InputReaders have the following properties:
@@ -60,10 +84,10 @@ class InputReader(JsonMixin):
      valuable to implement __str__.
   """
 
+
   _APP_PARAM = "_app"
   NAMESPACE_PARAM = "namespace"
   NAMESPACES_PARAM = "namespaces"
-  MAPPER_PARAMS = "mapper_params"
 
   def __iter__(self):
     return self
@@ -122,6 +146,9 @@ class InputReader(JsonMixin):
     raise NotImplementedError("validate() not implemented in %s" % cls)
 
 
+
+
+
 class AbstractDatastoreInputReader(InputReader):
   """Abstract base class for classes that iterate over datastore entities.
 
@@ -129,13 +156,20 @@ class AbstractDatastoreInputReader(InputReader):
   docstring for that method for details.
   """
 
+
   _BATCH_SIZE = 50
+
 
   _MAX_SHARD_COUNT = 256
 
+
   _OVERSAMPLING_FACTOR = 32
 
+
+
+
   MAX_NAMESPACES_FOR_KEY_SHARD = 10
+
 
   ENTITY_KIND_PARAM = "entity_kind"
   KEYS_ONLY_PARAM = "keys_only"
@@ -143,6 +177,9 @@ class AbstractDatastoreInputReader(InputReader):
   KEY_RANGE_PARAM = "key_range"
   NAMESPACE_RANGE_PARAM = "namespace_range"
   CURRENT_KEY_RANGE_PARAM = "current_key_range"
+
+
+
 
   def __init__(self,
                entity_kind,
@@ -169,6 +206,8 @@ class AbstractDatastoreInputReader(InputReader):
         "can't specify both 'key_ranges ' and 'ns_range'")
 
     self._entity_kind = entity_kind
+
+
     self._key_ranges = key_ranges and list(reversed(key_ranges))
 
     self._ns_range = ns_range
@@ -208,6 +247,8 @@ class AbstractDatastoreInputReader(InputReader):
 
       for key, o in self._iter_key_range(
           copy.deepcopy(self._current_key_range)):
+
+
         self._current_key_range.advance(key)
         yield o
       self._current_key_range = None
@@ -227,6 +268,8 @@ class AbstractDatastoreInputReader(InputReader):
 
       for key, o in self._iter_key_range(
           copy.deepcopy(self._current_key_range)):
+
+
         self._current_key_range.advance(key)
         yield o
 
@@ -268,6 +311,8 @@ class AbstractDatastoreInputReader(InputReader):
     return [sorted(random_keys)[int(round(index_stride * i))]
             for i in range(1, shard_count)]
 
+
+
   @classmethod
   def _split_input_from_namespace(cls, app, namespace, entity_kind_name,
                                   shard_count):
@@ -276,7 +321,10 @@ class AbstractDatastoreInputReader(InputReader):
     raw_entity_kind = util.get_short_name(entity_kind_name)
 
     if shard_count == 1:
+
       return [key_range.KeyRange(namespace=namespace, _app=app)]
+
+
 
     ds_query = datastore.Query(kind=raw_entity_kind,
                                namespace=namespace,
@@ -285,6 +333,8 @@ class AbstractDatastoreInputReader(InputReader):
     ds_query.Order("__scatter__")
     random_keys = ds_query.Get(shard_count * cls._OVERSAMPLING_FACTOR)
     if not random_keys:
+
+
       return [key_range.KeyRange(namespace=namespace, _app=app)]
     else:
       random_keys = cls._choose_split_points(random_keys, shard_count)
@@ -297,7 +347,8 @@ class AbstractDatastoreInputReader(InputReader):
         direction=key_range.KeyRange.ASC,
         include_start=False,
         include_end=False,
-        namespace=namespace))
+        namespace=namespace,
+        _app=app))
 
     for i in range(0, len(random_keys) - 1):
       key_ranges.append(key_range.KeyRange(
@@ -306,7 +357,8 @@ class AbstractDatastoreInputReader(InputReader):
           direction=key_range.KeyRange.ASC,
           include_start=True,
           include_end=False,
-          namespace=namespace))
+          namespace=namespace,
+          _app=app))
 
     key_ranges.append(key_range.KeyRange(
         key_start=random_keys[-1],
@@ -314,7 +366,8 @@ class AbstractDatastoreInputReader(InputReader):
         direction=key_range.KeyRange.ASC,
         include_start=True,
         include_end=False,
-        namespace=namespace))
+        namespace=namespace,
+        _app=app))
 
     return key_ranges
 
@@ -329,6 +382,9 @@ class AbstractDatastoreInputReader(InputReader):
                                           namespace,
                                           entity_kind_name,
                                           shard_count))
+
+
+
 
     shared_ranges = [[] for _ in range(shard_count)]
     for i, k_range in enumerate(key_ranges):
@@ -399,6 +455,17 @@ class AbstractDatastoreInputReader(InputReader):
     app = params.get(cls._APP_PARAM)
 
     if namespace is None:
+
+
+
+
+
+
+
+
+
+
+
       namespace_query = datastore.Query("__namespace__",
                                         keys_only=True,
                                         _app=app)
@@ -407,6 +474,7 @@ class AbstractDatastoreInputReader(InputReader):
 
       if len(namespace_keys) > cls.MAX_NAMESPACES_FOR_KEY_SHARD:
         ns_ranges = namespace_range.NamespaceRange.split(n=shard_count,
+                                                         contiguous=True,
                                                          _app=app)
         return [cls(entity_kind_name,
                     key_ranges=None,
@@ -532,6 +600,7 @@ class DatastoreInputReader(AbstractDatastoreInputReader):
                                  "Use DatastoreKeyInputReader instead.")
 
     entity_kind_name = params[cls.ENTITY_KIND_PARAM]
+
     try:
       util.for_name(entity_kind_name)
     except ImportError, e:
@@ -550,7 +619,7 @@ class DatastoreKeyInputReader(AbstractDatastoreInputReader):
       yield key, key
 
 
-class DatastoreEntityInputReader(DatastoreInputReader):
+class DatastoreEntityInputReader(AbstractDatastoreInputReader):
   """An input reader which yields low level datastore entities for a kind."""
 
   def _iter_key_range(self, k_range):
@@ -565,13 +634,18 @@ class DatastoreEntityInputReader(DatastoreInputReader):
 class BlobstoreLineInputReader(InputReader):
   """Input reader for a newline delimited blob in Blobstore."""
 
+
   _BLOB_BUFFER_SIZE = 64000
+
 
   _MAX_SHARD_COUNT = 256
 
+
   _MAX_BLOB_KEYS_COUNT = 246
 
+
   BLOB_KEYS_PARAM = "blob_keys"
+
 
   INITIAL_POSITION_PARAM = "initial_position"
   END_POSITION_PARAM = "end_position"
@@ -655,6 +729,8 @@ class BlobstoreLineInputReader(InputReader):
       raise BadReaderParamsError("Must specify 'blob_keys' for mapper input")
     blob_keys = params[cls.BLOB_KEYS_PARAM]
     if isinstance(blob_keys, basestring):
+
+
       blob_keys = blob_keys.split(",")
     if len(blob_keys) > cls._MAX_BLOB_KEYS_COUNT:
       raise BadReaderParamsError("Too many 'blob_keys' for mapper input")
@@ -680,6 +756,8 @@ class BlobstoreLineInputReader(InputReader):
     params = mapper_spec.params
     blob_keys = params[cls.BLOB_KEYS_PARAM]
     if isinstance(blob_keys, basestring):
+
+
       blob_keys = blob_keys.split(",")
 
     blob_sizes = {}
@@ -714,7 +792,9 @@ class BlobstoreZipInputReader(InputReader):
   and then only the contained files which it is responsible for.
   """
 
+
   _MAX_SHARD_COUNT = 256
+
 
   BLOB_KEY_PARAM = "blob_key"
   START_INDEX_PARAM = "start_index"
@@ -752,6 +832,7 @@ class BlobstoreZipInputReader(InputReader):
     """
     if not self._zip:
       self._zip = zipfile.ZipFile(self._reader(self._blob_key))
+
       self._entries = self._zip.infolist()[self._start_index:self._end_index]
       self._entries.reverse()
     if not self._entries:
@@ -832,6 +913,8 @@ class BlobstoreZipInputReader(InputReader):
     num_shards = min(mapper_spec.shard_count, cls._MAX_SHARD_COUNT)
     size_per_shard = total_size // num_shards
 
+
+
     shard_start_indexes = [0]
     current_shard_size = 0
     for i, fileinfo in enumerate(files):
@@ -859,11 +942,15 @@ class BlobstoreZipLineInputReader(InputReader):
   This is useful as many line delimited files gain greatly from compression.
   """
 
+
   _MAX_SHARD_COUNT = 256
+
 
   _MAX_BLOB_KEYS_COUNT = 246
 
+
   BLOB_KEYS_PARAM = "blob_keys"
+
 
   BLOB_KEY_PARAM = "blob_key"
   START_FILE_INDEX_PARAM = "start_file_index"
@@ -914,6 +1001,8 @@ class BlobstoreZipLineInputReader(InputReader):
 
     blob_keys = params[cls.BLOB_KEYS_PARAM]
     if isinstance(blob_keys, basestring):
+
+
       blob_keys = blob_keys.split(",")
     if len(blob_keys) > cls._MAX_BLOB_KEYS_COUNT:
       raise BadReaderParamsError("Too many 'blob_keys' for mapper input")
@@ -943,6 +1032,8 @@ class BlobstoreZipLineInputReader(InputReader):
     params = mapper_spec.params
     blob_keys = params[cls.BLOB_KEYS_PARAM]
     if isinstance(blob_keys, basestring):
+
+
       blob_keys = blob_keys.split(",")
 
     blob_files = {}
@@ -953,6 +1044,9 @@ class BlobstoreZipLineInputReader(InputReader):
       total_size += sum(x.file_size for x in blob_files[blob_key])
 
     shard_count = min(cls._MAX_SHARD_COUNT, mapper_spec.shard_count)
+
+
+
 
 
     size_per_shard = total_size // shard_count
@@ -989,6 +1083,7 @@ class BlobstoreZipLineInputReader(InputReader):
     if not self._filestream:
       if not self._zip:
         self._zip = zipfile.ZipFile(self._reader(self._blob_key))
+
         self._entries = self._zip.infolist()[self._start_file_index:
                                              self._end_file_index]
         self._entries.reverse()
@@ -1005,6 +1100,7 @@ class BlobstoreZipLineInputReader(InputReader):
     line = self._filestream.readline()
 
     if not line:
+
       self._filestream.close()
       self._filestream = None
       self._start_file_index += 1
@@ -1076,41 +1172,75 @@ class ConsistentKeyReader(DatastoreKeyInputReader):
   significant time to start yielding some data because it has to apply all
   modifications created before its start.
   """
-  START_TIME_US_PARAM = 'start_time_us'
-  UNAPPLIED_LOG_FILTER = '__unapplied_log_timestamp_us__ <'
-  DUMMY_KIND = 'DUMMY_KIND'
+  START_TIME_US_PARAM = "start_time_us"
+  UNAPPLIED_LOG_FILTER = "__unapplied_log_timestamp_us__ <"
+  DUMMY_KIND = "DUMMY_KIND"
   DUMMY_ID = 106275677020293L
+
+  def _get_unapplied_jobs_accross_namespaces(self,
+                                             namespace_start,
+                                             namespace_end,
+                                             app):
+    filters = {"__key__ >=": db.Key.from_path("__namespace__",
+                                              namespace_start or 1,
+                                              _app=app),
+               "__key__ <=": db.Key.from_path("__namespace__",
+                                              namespace_end or 1,
+                                              _app=app),
+               self.UNAPPLIED_LOG_FILTER: self.start_time_us}
+    unapplied_query = datastore.Query(filters=filters, keys_only=True, _app=app)
+    return unapplied_query.Get(limit=self._batch_size)
+
+  def _iter_ns_range(self):
+    while True:
+      unapplied_jobs = self._get_unapplied_jobs_accross_namespaces(
+          self._ns_range.namespace_start,
+          self._ns_range.namespace_end,
+          self._ns_range.app)
+
+      if not unapplied_jobs:
+        break
+
+      self._apply_jobs(unapplied_jobs)
+
+    for o in super(ConsistentKeyReader, self)._iter_ns_range():
+      yield o
 
   def _iter_key_range(self, k_range):
     assert hasattr(self, "start_time_us"), "start_time_us property was not set"
-    if datastore_rpc:
-      self._apply_jobs(k_range)
+    if self._ns_range is None:
+
+
+      while True:
+
+
+
+        unapplied_query = k_range.make_ascending_datastore_query(
+            kind=None, keys_only=True)
+        unapplied_query[
+            ConsistentKeyReader.UNAPPLIED_LOG_FILTER] = self.start_time_us
+        unapplied_jobs = unapplied_query.Get(limit=self._batch_size)
+        if not unapplied_jobs:
+          break
+        self._apply_jobs(unapplied_jobs)
 
     for o in super(ConsistentKeyReader, self)._iter_key_range(k_range):
       yield o
 
-  def _apply_jobs(self, k_range):
-    """Apply all jobs in the given key range."""
-    while True:
-      unapplied_query = k_range.make_ascending_datastore_query(
-          kind=None, keys_only=True)
-      unapplied_query[
-          ConsistentKeyReader.UNAPPLIED_LOG_FILTER] = self.start_time_us
-      unapplied_jobs = unapplied_query.Get(limit=self._batch_size)
+  def _apply_jobs(self, unapplied_jobs):
+    """Apply all jobs implied by the given keys."""
 
-      if not unapplied_jobs:
-        return
+    keys_to_apply = []
+    for key in unapplied_jobs:
 
-      keys_to_apply = []
-      for key in unapplied_jobs:
-        path = key.to_path() + [ConsistentKeyReader.DUMMY_KIND,
-                                ConsistentKeyReader.DUMMY_ID]
-        keys_to_apply.append(
-            db.Key.from_path(_app=key.app(), namespace=key.namespace(), *path))
-      db.get(keys_to_apply, config=datastore_rpc.Configuration(
-          deadline=10,
-          read_policy=datastore_rpc.Configuration.APPLY_ALL_JOBS_CONSISTENCY))
 
+      path = key.to_path() + [ConsistentKeyReader.DUMMY_KIND,
+                              ConsistentKeyReader.DUMMY_ID]
+      keys_to_apply.append(
+          db.Key.from_path(_app=key.app(), namespace=key.namespace(), *path))
+    db.get(keys_to_apply, config=datastore_rpc.Configuration(
+        deadline=10,
+        read_policy=datastore_rpc.Configuration.APPLY_ALL_JOBS_CONSISTENCY))
 
   @classmethod
   def _split_input_from_namespace(cls,
@@ -1120,6 +1250,9 @@ class ConsistentKeyReader(DatastoreKeyInputReader):
                                   shard_count):
     key_ranges = super(ConsistentKeyReader, cls)._split_input_from_namespace(
         app, namespace, entity_kind_name, shard_count)
+
+
+
 
     if key_ranges:
       key_ranges[0].key_start = None
@@ -1137,6 +1270,9 @@ class ConsistentKeyReader(DatastoreKeyInputReader):
         entity_kind_name,
         params,
         shard_count)
+
+
+
     if not readers:
       readers = [cls(entity_kind_name,
                      key_ranges=None,
@@ -1179,6 +1315,12 @@ class ConsistentKeyReader(DatastoreKeyInputReader):
     reader = super(ConsistentKeyReader, cls).from_json(json)
     reader.start_time_us = json[cls.START_TIME_US_PARAM]
     return reader
+
+
+
+
+
+
 
 
 class NamespaceInputReader(InputReader):
@@ -1255,7 +1397,8 @@ class NamespaceInputReader(InputReader):
     batch_size = int(mapper_spec.params.get(cls.BATCH_SIZE_PARAM,
                                             cls._BATCH_SIZE))
     shard_count = mapper_spec.shard_count
-    namespace_ranges = namespace_range.NamespaceRange.split(shard_count)
+    namespace_ranges = namespace_range.NamespaceRange.split(shard_count,
+                                                            contiguous=True)
     return [NamespaceInputReader(ns_range, batch_size)
             for ns_range in namespace_ranges]
 

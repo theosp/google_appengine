@@ -15,7 +15,12 @@
 # limitations under the License.
 #
 
+
+
+
 """Used render templates for datastore admin."""
+
+
 
 
 
@@ -56,8 +61,15 @@ class ConfigDefaults(object):
   CLEANUP_MAPREDUCE_STATE = True
 
 
+
 config = lib_config.register('datastore_admin', ConfigDefaults.__dict__)
+
+
+
+
 config.BASE_PATH
+
+
 from google.appengine.ext.webapp import template
 
 
@@ -349,6 +361,7 @@ class MapreduceDoneHandler(webapp.RequestHandler):
         db.run_in_transaction(tx)
 
         if config.CLEANUP_MAPREDUCE_STATE:
+
           keys.append(mapreduce_state.key())
           keys.append(model.MapreduceControl.get_key_by_job_id(mapreduce_id))
           db.delete(keys, config=db_config)
@@ -364,6 +377,7 @@ class DatastoreAdminOperation(db.Model):
   """An entity to keep progress and status of datastore admin operation."""
   STATUS_ACTIVE = "Active"
   STATUS_COMPLETED = "Completed"
+
 
   PARAM_DATASTORE_ADMIN_OPERATION = 'datastore_admin_operation'
 
@@ -396,6 +410,9 @@ def StartOperation(description):
   Returns:
     an instance of DatastoreAdminOperation.
   """
+
+
+
   operation = DatastoreAdminOperation(
       description=description,
       status=DatastoreAdminOperation.STATUS_ACTIVE,
@@ -440,6 +457,7 @@ def StartMap(operation,
   def tx():
     operation.active_jobs += 1
     operation.put(config=_CreateDatastoreConfig())
+
 
     return control.start_map(
         job_name, handler_spec, reader_spec,

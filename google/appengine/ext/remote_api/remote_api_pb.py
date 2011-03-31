@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -22,19 +24,19 @@ import dummy_thread as thread
 __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
                    unusednames=printElemNumber,debug_strs no-special"""
 
-from google.net.proto.RawMessage import RawMessage
-from google.appengine.datastore.datastore_pb import PutRequest
-from google.appengine.datastore.datastore_pb import DeleteRequest
-from google.appengine.datastore.entity_pb import Reference
+from google.appengine.datastore.datastore_v3_pb import *
+import google.appengine.datastore.datastore_v3_pb
+from google.appengine.datastore.entity_pb import *
+import google.appengine.datastore.entity_pb
 class Request(ProtocolBuffer.ProtocolMessage):
   has_service_name_ = 0
   service_name_ = ""
   has_method_ = 0
   method_ = ""
   has_request_ = 0
+  request_ = ""
 
   def __init__(self, contents=None):
-    self.request_ = RawMessage()
     if contents is not None: self.MergeFromString(contents)
 
   def service_name(self): return self.service_name_
@@ -65,9 +67,14 @@ class Request(ProtocolBuffer.ProtocolMessage):
 
   def request(self): return self.request_
 
-  def mutable_request(self): self.has_request_ = 1; return self.request_
+  def set_request(self, x):
+    self.has_request_ = 1
+    self.request_ = x
 
-  def clear_request(self):self.has_request_ = 0; self.request_.Clear()
+  def clear_request(self):
+    if self.has_request_:
+      self.has_request_ = 0
+      self.request_ = ""
 
   def has_request(self): return self.has_request_
 
@@ -76,7 +83,7 @@ class Request(ProtocolBuffer.ProtocolMessage):
     assert x is not self
     if (x.has_service_name()): self.set_service_name(x.service_name())
     if (x.has_method()): self.set_method(x.method())
-    if (x.has_request()): self.mutable_request().MergeFrom(x.request())
+    if (x.has_request()): self.set_request(x.request())
 
   def Equals(self, x):
     if x is self: return 1
@@ -102,14 +109,13 @@ class Request(ProtocolBuffer.ProtocolMessage):
       initialized = 0
       if debug_strs is not None:
         debug_strs.append('Required field: request not set.')
-    elif not self.request_.IsInitialized(debug_strs): initialized = 0
     return initialized
 
   def ByteSize(self):
     n = 0
     n += self.lengthString(len(self.service_name_))
     n += self.lengthString(len(self.method_))
-    n += self.lengthString(self.request_.ByteSize())
+    n += self.lengthString(len(self.request_))
     return n + 3
 
   def ByteSizePartial(self):
@@ -122,7 +128,7 @@ class Request(ProtocolBuffer.ProtocolMessage):
       n += self.lengthString(len(self.method_))
     if (self.has_request_):
       n += 1
-      n += self.lengthString(self.request_.ByteSizePartial())
+      n += self.lengthString(len(self.request_))
     return n
 
   def Clear(self):
@@ -136,8 +142,7 @@ class Request(ProtocolBuffer.ProtocolMessage):
     out.putVarInt32(26)
     out.putPrefixedString(self.method_)
     out.putVarInt32(34)
-    out.putVarInt32(self.request_.ByteSize())
-    self.request_.OutputUnchecked(out)
+    out.putPrefixedString(self.request_)
 
   def OutputPartial(self, out):
     if (self.has_service_name_):
@@ -148,8 +153,7 @@ class Request(ProtocolBuffer.ProtocolMessage):
       out.putPrefixedString(self.method_)
     if (self.has_request_):
       out.putVarInt32(34)
-      out.putVarInt32(self.request_.ByteSizePartial())
-      self.request_.OutputPartial(out)
+      out.putPrefixedString(self.request_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
@@ -161,11 +165,10 @@ class Request(ProtocolBuffer.ProtocolMessage):
         self.set_method(d.getPrefixedString())
         continue
       if tt == 34:
-        length = d.getVarInt32()
-        tmp = ProtocolBuffer.Decoder(d.buffer(), d.pos(), d.pos() + length)
-        d.skip(length)
-        self.mutable_request().TryMerge(tmp)
+        self.set_request(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -174,10 +177,7 @@ class Request(ProtocolBuffer.ProtocolMessage):
     res=""
     if self.has_service_name_: res+=prefix+("service_name: %s\n" % self.DebugFormatString(self.service_name_))
     if self.has_method_: res+=prefix+("method: %s\n" % self.DebugFormatString(self.method_))
-    if self.has_request_:
-      res+=prefix+"request <\n"
-      res+=self.request_.__str__(prefix + "  ", printElemNumber)
-      res+=prefix+">\n"
+    if self.has_request_: res+=prefix+("request: %s\n" % self.DebugFormatString(self.request_))
     return res
 
 
@@ -201,6 +201,7 @@ class Request(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.STRING,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -308,6 +309,8 @@ class ApplicationError(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_detail(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -337,55 +340,46 @@ class ApplicationError(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class Response(ProtocolBuffer.ProtocolMessage):
   has_response_ = 0
-  response_ = None
+  response_ = ""
   has_exception_ = 0
-  exception_ = None
+  exception_ = ""
   has_application_error_ = 0
   application_error_ = None
   has_java_exception_ = 0
-  java_exception_ = None
+  java_exception_ = ""
 
   def __init__(self, contents=None):
     self.lazy_init_lock_ = thread.allocate_lock()
     if contents is not None: self.MergeFromString(contents)
 
-  def response(self):
-    if self.response_ is None:
-      self.lazy_init_lock_.acquire()
-      try:
-        if self.response_ is None: self.response_ = RawMessage()
-      finally:
-        self.lazy_init_lock_.release()
-    return self.response_
+  def response(self): return self.response_
 
-  def mutable_response(self): self.has_response_ = 1; return self.response()
+  def set_response(self, x):
+    self.has_response_ = 1
+    self.response_ = x
 
   def clear_response(self):
     if self.has_response_:
-      self.has_response_ = 0;
-      if self.response_ is not None: self.response_.Clear()
+      self.has_response_ = 0
+      self.response_ = ""
 
   def has_response(self): return self.has_response_
 
-  def exception(self):
-    if self.exception_ is None:
-      self.lazy_init_lock_.acquire()
-      try:
-        if self.exception_ is None: self.exception_ = RawMessage()
-      finally:
-        self.lazy_init_lock_.release()
-    return self.exception_
+  def exception(self): return self.exception_
 
-  def mutable_exception(self): self.has_exception_ = 1; return self.exception()
+  def set_exception(self, x):
+    self.has_exception_ = 1
+    self.exception_ = x
 
   def clear_exception(self):
     if self.has_exception_:
-      self.has_exception_ = 0;
-      if self.exception_ is not None: self.exception_.Clear()
+      self.has_exception_ = 0
+      self.exception_ = ""
 
   def has_exception(self): return self.has_exception_
 
@@ -401,37 +395,33 @@ class Response(ProtocolBuffer.ProtocolMessage):
   def mutable_application_error(self): self.has_application_error_ = 1; return self.application_error()
 
   def clear_application_error(self):
+
     if self.has_application_error_:
       self.has_application_error_ = 0;
       if self.application_error_ is not None: self.application_error_.Clear()
 
   def has_application_error(self): return self.has_application_error_
 
-  def java_exception(self):
-    if self.java_exception_ is None:
-      self.lazy_init_lock_.acquire()
-      try:
-        if self.java_exception_ is None: self.java_exception_ = RawMessage()
-      finally:
-        self.lazy_init_lock_.release()
-    return self.java_exception_
+  def java_exception(self): return self.java_exception_
 
-  def mutable_java_exception(self): self.has_java_exception_ = 1; return self.java_exception()
+  def set_java_exception(self, x):
+    self.has_java_exception_ = 1
+    self.java_exception_ = x
 
   def clear_java_exception(self):
     if self.has_java_exception_:
-      self.has_java_exception_ = 0;
-      if self.java_exception_ is not None: self.java_exception_.Clear()
+      self.has_java_exception_ = 0
+      self.java_exception_ = ""
 
   def has_java_exception(self): return self.has_java_exception_
 
 
   def MergeFrom(self, x):
     assert x is not self
-    if (x.has_response()): self.mutable_response().MergeFrom(x.response())
-    if (x.has_exception()): self.mutable_exception().MergeFrom(x.exception())
+    if (x.has_response()): self.set_response(x.response())
+    if (x.has_exception()): self.set_exception(x.exception())
     if (x.has_application_error()): self.mutable_application_error().MergeFrom(x.application_error())
-    if (x.has_java_exception()): self.mutable_java_exception().MergeFrom(x.java_exception())
+    if (x.has_java_exception()): self.set_java_exception(x.java_exception())
 
   def Equals(self, x):
     if x is self: return 1
@@ -447,26 +437,23 @@ class Response(ProtocolBuffer.ProtocolMessage):
 
   def IsInitialized(self, debug_strs=None):
     initialized = 1
-    if (self.has_response_ and not self.response_.IsInitialized(debug_strs)): initialized = 0
-    if (self.has_exception_ and not self.exception_.IsInitialized(debug_strs)): initialized = 0
     if (self.has_application_error_ and not self.application_error_.IsInitialized(debug_strs)): initialized = 0
-    if (self.has_java_exception_ and not self.java_exception_.IsInitialized(debug_strs)): initialized = 0
     return initialized
 
   def ByteSize(self):
     n = 0
-    if (self.has_response_): n += 1 + self.lengthString(self.response_.ByteSize())
-    if (self.has_exception_): n += 1 + self.lengthString(self.exception_.ByteSize())
+    if (self.has_response_): n += 1 + self.lengthString(len(self.response_))
+    if (self.has_exception_): n += 1 + self.lengthString(len(self.exception_))
     if (self.has_application_error_): n += 1 + self.lengthString(self.application_error_.ByteSize())
-    if (self.has_java_exception_): n += 1 + self.lengthString(self.java_exception_.ByteSize())
+    if (self.has_java_exception_): n += 1 + self.lengthString(len(self.java_exception_))
     return n
 
   def ByteSizePartial(self):
     n = 0
-    if (self.has_response_): n += 1 + self.lengthString(self.response_.ByteSizePartial())
-    if (self.has_exception_): n += 1 + self.lengthString(self.exception_.ByteSizePartial())
+    if (self.has_response_): n += 1 + self.lengthString(len(self.response_))
+    if (self.has_exception_): n += 1 + self.lengthString(len(self.exception_))
     if (self.has_application_error_): n += 1 + self.lengthString(self.application_error_.ByteSizePartial())
-    if (self.has_java_exception_): n += 1 + self.lengthString(self.java_exception_.ByteSizePartial())
+    if (self.has_java_exception_): n += 1 + self.lengthString(len(self.java_exception_))
     return n
 
   def Clear(self):
@@ -478,53 +465,41 @@ class Response(ProtocolBuffer.ProtocolMessage):
   def OutputUnchecked(self, out):
     if (self.has_response_):
       out.putVarInt32(10)
-      out.putVarInt32(self.response_.ByteSize())
-      self.response_.OutputUnchecked(out)
+      out.putPrefixedString(self.response_)
     if (self.has_exception_):
       out.putVarInt32(18)
-      out.putVarInt32(self.exception_.ByteSize())
-      self.exception_.OutputUnchecked(out)
+      out.putPrefixedString(self.exception_)
     if (self.has_application_error_):
       out.putVarInt32(26)
       out.putVarInt32(self.application_error_.ByteSize())
       self.application_error_.OutputUnchecked(out)
     if (self.has_java_exception_):
       out.putVarInt32(34)
-      out.putVarInt32(self.java_exception_.ByteSize())
-      self.java_exception_.OutputUnchecked(out)
+      out.putPrefixedString(self.java_exception_)
 
   def OutputPartial(self, out):
     if (self.has_response_):
       out.putVarInt32(10)
-      out.putVarInt32(self.response_.ByteSizePartial())
-      self.response_.OutputPartial(out)
+      out.putPrefixedString(self.response_)
     if (self.has_exception_):
       out.putVarInt32(18)
-      out.putVarInt32(self.exception_.ByteSizePartial())
-      self.exception_.OutputPartial(out)
+      out.putPrefixedString(self.exception_)
     if (self.has_application_error_):
       out.putVarInt32(26)
       out.putVarInt32(self.application_error_.ByteSizePartial())
       self.application_error_.OutputPartial(out)
     if (self.has_java_exception_):
       out.putVarInt32(34)
-      out.putVarInt32(self.java_exception_.ByteSizePartial())
-      self.java_exception_.OutputPartial(out)
+      out.putPrefixedString(self.java_exception_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
       if tt == 10:
-        length = d.getVarInt32()
-        tmp = ProtocolBuffer.Decoder(d.buffer(), d.pos(), d.pos() + length)
-        d.skip(length)
-        self.mutable_response().TryMerge(tmp)
+        self.set_response(d.getPrefixedString())
         continue
       if tt == 18:
-        length = d.getVarInt32()
-        tmp = ProtocolBuffer.Decoder(d.buffer(), d.pos(), d.pos() + length)
-        d.skip(length)
-        self.mutable_exception().TryMerge(tmp)
+        self.set_exception(d.getPrefixedString())
         continue
       if tt == 26:
         length = d.getVarInt32()
@@ -533,33 +508,23 @@ class Response(ProtocolBuffer.ProtocolMessage):
         self.mutable_application_error().TryMerge(tmp)
         continue
       if tt == 34:
-        length = d.getVarInt32()
-        tmp = ProtocolBuffer.Decoder(d.buffer(), d.pos(), d.pos() + length)
-        d.skip(length)
-        self.mutable_java_exception().TryMerge(tmp)
+        self.set_java_exception(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
 
   def __str__(self, prefix="", printElemNumber=0):
     res=""
-    if self.has_response_:
-      res+=prefix+"response <\n"
-      res+=self.response_.__str__(prefix + "  ", printElemNumber)
-      res+=prefix+">\n"
-    if self.has_exception_:
-      res+=prefix+"exception <\n"
-      res+=self.exception_.__str__(prefix + "  ", printElemNumber)
-      res+=prefix+">\n"
+    if self.has_response_: res+=prefix+("response: %s\n" % self.DebugFormatString(self.response_))
+    if self.has_exception_: res+=prefix+("exception: %s\n" % self.DebugFormatString(self.exception_))
     if self.has_application_error_:
       res+=prefix+"application_error <\n"
       res+=self.application_error_.__str__(prefix + "  ", printElemNumber)
       res+=prefix+">\n"
-    if self.has_java_exception_:
-      res+=prefix+"java_exception <\n"
-      res+=self.java_exception_.__str__(prefix + "  ", printElemNumber)
-      res+=prefix+">\n"
+    if self.has_java_exception_: res+=prefix+("java_exception: %s\n" % self.DebugFormatString(self.java_exception_))
     return res
 
 
@@ -586,6 +551,7 @@ class Response(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.STRING,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -690,6 +656,8 @@ class TransactionRequest_Precondition(ProtocolBuffer.ProtocolMessage):
       if tt == 26:
         self.set_hash(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -742,6 +710,7 @@ class TransactionRequest(ProtocolBuffer.ProtocolMessage):
   def mutable_puts(self): self.has_puts_ = 1; return self.puts()
 
   def clear_puts(self):
+
     if self.has_puts_:
       self.has_puts_ = 0;
       if self.puts_ is not None: self.puts_.Clear()
@@ -760,6 +729,7 @@ class TransactionRequest(ProtocolBuffer.ProtocolMessage):
   def mutable_deletes(self): self.has_deletes_ = 1; return self.deletes()
 
   def clear_deletes(self):
+
     if self.has_deletes_:
       self.has_deletes_ = 0;
       if self.deletes_ is not None: self.deletes_.Clear()
@@ -859,6 +829,8 @@ class TransactionRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_deletes().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -910,6 +882,7 @@ class TransactionRequest(ProtocolBuffer.ProtocolMessage):
     4: ProtocolBuffer.Encoder.STRING,
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

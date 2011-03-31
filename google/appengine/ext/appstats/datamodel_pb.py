@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -126,6 +128,8 @@ class AggregateRpcStatsProto(ProtocolBuffer.ProtocolMessage):
       if tt == 24:
         self.set_total_amount_of_calls(d.getVarInt64())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -154,6 +158,7 @@ class AggregateRpcStatsProto(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     3: ProtocolBuffer.Encoder.NUMERIC,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -261,6 +266,8 @@ class KeyValProto(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_value(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -289,6 +296,7 @@ class KeyValProto(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -468,6 +476,8 @@ class StackFrameProto(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_variables().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -511,6 +521,7 @@ class StackFrameProto(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.STRING,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -840,6 +851,8 @@ class IndividualRpcStatsProto(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_call_stack().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -903,6 +916,7 @@ class IndividualRpcStatsProto(ProtocolBuffer.ProtocolMessage):
     9: ProtocolBuffer.Encoder.NUMERIC,
     10: ProtocolBuffer.Encoder.STRING,
   }, 10, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1406,6 +1420,8 @@ class RequestStatProto(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_individual_stats().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1503,6 +1519,7 @@ class RequestStatProto(ProtocolBuffer.ProtocolMessage):
     104: ProtocolBuffer.Encoder.NUMERIC,
     107: ProtocolBuffer.Encoder.STRING,
   }, 107, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

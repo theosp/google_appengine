@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -25,6 +27,7 @@ __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
 from google.appengine.api.api_base_pb import *
 import google.appengine.api.api_base_pb
 class UserServiceError(ProtocolBuffer.ProtocolMessage):
+
 
   OK           =    0
   REDIRECT_URL_TOO_LONG =    1
@@ -82,6 +85,8 @@ class UserServiceError(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -102,6 +107,7 @@ class UserServiceError(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -234,6 +240,8 @@ class CreateLoginURLRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 26:
         self.set_federated_identity(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -266,6 +274,7 @@ class CreateLoginURLRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -338,6 +347,8 @@ class CreateLoginURLResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_login_url(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -362,6 +373,7 @@ class CreateLoginURLResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -464,6 +476,8 @@ class CreateLogoutURLRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_auth_domain(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -492,6 +506,7 @@ class CreateLogoutURLRequest(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -564,6 +579,8 @@ class CreateLogoutURLResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_logout_url(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -589,20 +606,38 @@ class CreateLogoutURLResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
+  has_scope_ = 0
+  scope_ = ""
 
   def __init__(self, contents=None):
-    pass
     if contents is not None: self.MergeFromString(contents)
+
+  def scope(self): return self.scope_
+
+  def set_scope(self, x):
+    self.has_scope_ = 1
+    self.scope_ = x
+
+  def clear_scope(self):
+    if self.has_scope_:
+      self.has_scope_ = 0
+      self.scope_ = ""
+
+  def has_scope(self): return self.has_scope_
 
 
   def MergeFrom(self, x):
     assert x is not self
+    if (x.has_scope()): self.set_scope(x.scope())
 
   def Equals(self, x):
     if x is self: return 1
+    if self.has_scope_ != x.has_scope_: return 0
+    if self.has_scope_ and self.scope_ != x.scope_: return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -611,44 +646,60 @@ class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
 
   def ByteSize(self):
     n = 0
+    if (self.has_scope_): n += 1 + self.lengthString(len(self.scope_))
     return n
 
   def ByteSizePartial(self):
     n = 0
+    if (self.has_scope_): n += 1 + self.lengthString(len(self.scope_))
     return n
 
   def Clear(self):
-    pass
+    self.clear_scope()
 
   def OutputUnchecked(self, out):
-    pass
+    if (self.has_scope_):
+      out.putVarInt32(10)
+      out.putPrefixedString(self.scope_)
 
   def OutputPartial(self, out):
-    pass
+    if (self.has_scope_):
+      out.putVarInt32(10)
+      out.putPrefixedString(self.scope_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+      if tt == 10:
+        self.set_scope(d.getPrefixedString())
+        continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
 
   def __str__(self, prefix="", printElemNumber=0):
     res=""
+    if self.has_scope_: res+=prefix+("scope: %s\n" % self.DebugFormatString(self.scope_))
     return res
 
 
   def _BuildTagLookupTable(sparse, maxtag, default=None):
     return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])
 
+  kscope = 1
 
   _TEXT = _BuildTagLookupTable({
     0: "ErrorCode",
-  }, 0)
+    1: "scope",
+  }, 1)
 
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
-  }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+    1: ProtocolBuffer.Encoder.STRING,
+  }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -851,6 +902,8 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 40:
         self.set_is_admin(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -892,6 +945,7 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.NUMERIC,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class CheckOAuthSignatureRequest(ProtocolBuffer.ProtocolMessage):
@@ -932,6 +986,8 @@ class CheckOAuthSignatureRequest(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -952,6 +1008,7 @@ class CheckOAuthSignatureRequest(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1024,6 +1081,8 @@ class CheckOAuthSignatureResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_oauth_consumer_key(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1048,6 +1107,7 @@ class CheckOAuthSignatureResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1185,6 +1245,8 @@ class CreateFederatedLoginRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 26:
         self.set_authority(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1217,6 +1279,7 @@ class CreateFederatedLoginRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1289,6 +1352,8 @@ class CreateFederatedLoginResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_redirected_url(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1313,6 +1378,7 @@ class CreateFederatedLoginResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1385,6 +1451,8 @@ class CreateFederatedLogoutRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_destination_url(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1409,6 +1477,7 @@ class CreateFederatedLogoutRequest(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1481,6 +1550,8 @@ class CreateFederatedLogoutResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_logout_url(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1505,6 +1576,7 @@ class CreateFederatedLogoutResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

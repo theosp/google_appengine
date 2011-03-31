@@ -15,7 +15,15 @@
 # limitations under the License.
 #
 
+
+
+
+
 """Utilities for interacting with the Python Runtime."""
+
+
+
+
 
 
 
@@ -56,6 +64,8 @@ def set_shutdown_hook(hook):
 
 
 def __BeginShutdown():
+
+
   global __shuting_down
   __shuting_down = True
   if __shutdown_hook:

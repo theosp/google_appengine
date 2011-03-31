@@ -15,6 +15,7 @@
 # limitations under the License.
 #
 
+
 """
 This is the Python counterpart to the RawMessage class defined in rawmessage.h.
 

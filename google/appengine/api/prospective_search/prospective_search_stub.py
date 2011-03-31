@@ -15,7 +15,14 @@
 # limitations under the License.
 #
 
+
+
+
 """In-memory persistent prospective_search API stub for dev_appserver."""
+
+
+
+
 
 
 
@@ -28,6 +35,8 @@ import re
 import sys
 import time
 import urllib
+
+
 import cPickle as pickle
 
 from collections import deque
@@ -186,6 +195,7 @@ class _InField(object):
     self.expr = expr
 
   def __call__(self, doc):
+
     old_field = doc['']
     doc[''] = doc.get(self.field, [])
     ret = self.expr(doc)
@@ -230,6 +240,7 @@ class _BoolIs(object):
     if (value == 'true'):
       self.value = True
     else:
+
       self.value = False
 
   def __call__(self, doc):
@@ -243,6 +254,9 @@ class _BoolIs(object):
 
 class _Parser(object):
   """Parse vanillia query to expression callable."""
+
+
+
 
   LEX_RE = re.compile(r"""
       \s*  # whitespace
@@ -297,7 +311,7 @@ class _Parser(object):
         bool_value = self.src.popleft()
         self.token = self.src.popleft()
         return _BoolIs(field, bool_value)
-      elif self.src[0] == ':':
+      elif self.src[0] in [':', '=']:
         self.token = self.src.popleft()
         self.token = self.src.popleft()
         return _InField(field, self._ParseCompoundOrLiteral())
@@ -406,12 +420,16 @@ class ProspectiveSearchStub(apiproxy_stub.APIProxyStub):
     schema = self._Get_Schema(request.schema_entry_list())
     self.topics_schema[request.topic()] = schema
     parsed = _Parser(request.vanilla_query(), schema).ParseQuery()
-    expires = time.time() + request.lease_duration_sec()
+    if (request.lease_duration_sec() == 0):
+      expires = time.time() + 0xffffffff
+    else:
+      expires = time.time() + request.lease_duration_sec()
     topic_subs = self.topics.setdefault(request.topic(), {})
     topic_subs[request.sub_id()] = (request.vanilla_query(), expires)
     topic_parsed_subs = self.topics_parsed.setdefault(request.topic(), {})
     topic_parsed_subs[request.sub_id()] = parsed
     self._Write()
+
 
   def _Dynamic_Unsubscribe(self, request, response):
     """Unsubscribe a query.
@@ -537,14 +555,18 @@ class ProspectiveSearchStub(apiproxy_stub.APIProxyStub):
     properties = itertools.chain(request.document().property_list(),
                                  request.document().raw_property_list())
     for prop in properties:
+
       doc.setdefault(prop.name(), [])
       if prop.value().has_int64value():
         value = prop.value().int64value()
+
         if (value < 2**32) and (value >= -2**32):
           doc[prop.name()].append(prop.value().int64value())
       elif prop.value().has_stringvalue():
+
         unicode_value = unicode(prop.value().stringvalue(), 'utf-8')
         doc[prop.name()].append(unicode_value)
+
         doc[''].append(unicode_value)
       elif prop.value().has_doublevalue():
         doc[prop.name()].append(prop.value().doublevalue())

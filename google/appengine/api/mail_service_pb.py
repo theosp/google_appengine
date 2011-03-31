@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -25,6 +27,7 @@ __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
 from google.appengine.api.api_base_pb import *
 import google.appengine.api.api_base_pb
 class MailServiceError(ProtocolBuffer.ProtocolMessage):
+
 
   OK           =    0
   INTERNAL_ERROR =    1
@@ -80,6 +83,8 @@ class MailServiceError(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -100,6 +105,7 @@ class MailServiceError(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -207,6 +213,8 @@ class MailAttachment(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_data(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -235,6 +243,7 @@ class MailAttachment(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -576,6 +585,8 @@ class MailMessage(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_attachment().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -654,6 +665,7 @@ class MailMessage(ProtocolBuffer.ProtocolMessage):
     8: ProtocolBuffer.Encoder.STRING,
     9: ProtocolBuffer.Encoder.STRING,
   }, 9, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -59,6 +61,7 @@ class CapabilityConfigList(ProtocolBuffer.ProtocolMessage):
   def mutable_default_config(self): self.has_default_config_ = 1; return self.default_config()
 
   def clear_default_config(self):
+
     if self.has_default_config_:
       self.has_default_config_ = 0;
       if self.default_config_ is not None: self.default_config_.Clear()
@@ -140,6 +143,8 @@ class CapabilityConfigList(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_default_config().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -179,9 +184,11 @@ class CapabilityConfigList(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class CapabilityConfig(ProtocolBuffer.ProtocolMessage):
+
 
   ENABLED      =    1
   SCHEDULED    =    2
@@ -451,6 +458,8 @@ class CapabilityConfig(ProtocolBuffer.ProtocolMessage):
       if tt == 58:
         self.set_scheduled_time(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -499,6 +508,7 @@ class CapabilityConfig(ProtocolBuffer.ProtocolMessage):
     6: ProtocolBuffer.Encoder.STRING,
     7: ProtocolBuffer.Encoder.STRING,
   }, 7, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

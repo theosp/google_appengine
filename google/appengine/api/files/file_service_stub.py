@@ -15,6 +15,9 @@
 # limitations under the License.
 #
 
+
+
+
 """Stubs for File service."""
 
 
@@ -33,10 +36,12 @@ import urlparse
 from google.appengine.api import apiproxy_stub
 from google.appengine.api import datastore
 from google.appengine.api import datastore_errors
+from google.appengine.api.files import blobstore as files_blobstore
 from google.appengine.api.files import file_service_pb
 from google.appengine.ext import blobstore
 from google.appengine.runtime import apiproxy_errors
 from google.appengine.tools import dev_appserver_upload
+
 
 
 _now_function = datetime.datetime.now
@@ -70,7 +75,11 @@ class FileStorage:
     self.sequence_keys = {}
     self.blob_storage = blob_storage
 
+
+
     self.blob_content_types = {}
+
+    self.blob_file_names = {}
 
   def finalize(self, filename):
     """Marks file as finalized."""
@@ -95,10 +104,11 @@ class FileStorage:
     """Checks if blobstore file was already created."""
     return filename in self.blobstore_files
 
-  def add_blobstore_file(self, filename, content_type):
+  def add_blobstore_file(self, filename, content_type, blob_file_name):
     """Registers a created blob store file."""
     self.blobstore_files.add(filename)
     self.blob_content_types[filename] = content_type
+    self.blob_file_names[filename] = blob_file_name
 
   def get_sequence_key(self, filename):
     """Get sequence key for a file."""
@@ -134,88 +144,8 @@ class FileStorage:
   def get_content_type(self, filename):
     return self.blob_content_types[filename]
 
-  def create(self, filename):
-    self.created_files.add(filename)
-
-  def exists(self, filename):
-    return filename in self.created_files
-
-
-class NewBlobstoreFile(object):
-  """File object for '/blobstore/new' file."""
-
-  def __init__(self, file_storage):
-    """Constructor.
-
-    Args:
-      file_storage: An instance of FileStorage.
-    """
-    self.file_storage = file_storage
-
-  def read(self, request, response):
-    """Read data from file.
-
-    Generates new /blobstore/<filename> name and registers it in the stub.
-
-    Args:
-      request: An instance of file_service_pb.ReadRequest.
-      response: An instance of file_service_pb.ReadResponse.
-    """
-    pos = request.pos()
-    max_bytes = request.max_bytes()
-    request_filename = request.filename()
-    request_qs = urlparse.urlparse(request_filename).query
-    params = cgi.parse_qs(request_qs)
-
-    if 'content_type' not in params:
-      raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME,
-                  'content_type not specified')
-    content_type = params['content_type'][0]
-
-    random_str = ''.join(
-        random.choice(string.ascii_uppercase + string.digits)
-        for _ in range(64))
-    filename = '/blobstore/' + base64.urlsafe_b64encode(random_str)
-    self.file_storage.add_blobstore_file(filename, content_type)
-    result = filename[pos:(pos + max_bytes)]
-    response.set_data(result)
-
-  def append(self, request, response):
-    """Append data to file (raises error)."""
-    raise_error(file_service_pb.FileServiceErrors.WRONG_OPEN_MODE)
-
-
-class GetBlobKeyFile(object):
-  """File object for a /blobstore/get_blob_key file."""
-
-  def __init__(self, filename, file_storage):
-    """Constructor.
-
-    Args:
-      filename: file name as string.
-      file_storage: an instance of FileStorage."""
-    self.filename = filename
-    self.file_storage = file_storage
-
-    request_qs = urlparse.urlparse(filename).query
-    params = cgi.parse_qs(request_qs)
-
-    if 'ticket' not in params:
-      raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME,
-                  'ticket not specified')
-    self.ticket = params['ticket'][0]
-
-  def read(self, request, response):
-    """Read from file."""
-    assert self.filename == request.filename()
-    pos = request.pos()
-    max_bytes = request.max_bytes()
-    result = self.file_storage.get_blob_key(self.ticket)
-    if result is None:
-      raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME,
-                  'invalid ticket')
-    result = result[pos:(pos + max_bytes)]
-    response.set_data(result)
+  def get_blob_file_name(self, filename):
+    return self.blob_file_names[filename]
 
 
 class BlobstoreFile(object):
@@ -236,25 +166,23 @@ class BlobstoreFile(object):
 
     open_mode = open_request.open_mode()
     content_type = open_request.content_type()
-    create = open_request.create_options().create()
-    exists = self.file_storage.exists(self.filename)
 
     if not self.filename.startswith('/blobstore/'):
       if not self.file_storage.has_blobstore_file(self.filename):
         raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME)
+
     self.ticket = self.filename[len('/blobstore/'):]
 
     if open_mode == file_service_pb.OpenRequest.APPEND:
       if not self.file_storage.has_blobstore_file(self.filename):
-        raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME)
-      if (create and exists) or ((not create) and (not exists)):
         raise_error(file_service_pb.FileServiceErrors.EXISTENCE_ERROR)
 
       self.mime_content_type = self.file_storage.get_content_type(self.filename)
+      self.blob_file_name = self.file_storage.get_blob_file_name(self.filename)
     else:
       blob_info = blobstore.BlobInfo.get(self.ticket)
       if not blob_info:
-        raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME)
+        raise_error(file_service_pb.FileServiceErrors.FINALIZATION_ERROR)
       self.blob_reader = blobstore.BlobReader(blob_info)
       self.mime_content_type = blob_info.content_type
     if content_type != file_service_pb.FileContentType.RAW:
@@ -263,9 +191,6 @@ class BlobstoreFile(object):
     if self.file_storage.is_finalized(self.filename):
       raise_error(file_service_pb.FileServiceErrors.FINALIZATION_ERROR,
                   'File is already finalized')
-
-    if create:
-      self.file_storage.create(self.filename)
 
   def read(self, request, response):
     """Read data from file
@@ -311,8 +236,9 @@ class BlobstoreFile(object):
                                    namespace='')
     blob_entity['content_type'] = self.mime_content_type
     blob_entity['creation'] = _now_function()
-    blob_entity['filename'] = self.ticket
+    blob_entity['filename'] = self.blob_file_name
     blob_entity['size'] = size
+    blob_entity['creation_handle'] = self.ticket
     datastore.Put(blob_entity)
 
 
@@ -325,29 +251,46 @@ class FileServiceStub(apiproxy_stub.APIProxyStub):
     self.open_files = {}
     self.file_storage = FileStorage(blob_storage)
 
+  def _Dynamic_Create(self, request, response):
+    filesystem = request.filesystem()
+
+    if filesystem != files_blobstore._BLOBSTORE_FILESYSTEM:
+      raise_error(file_service_pb.FileServiceErrors.UNSUPPORTED_FILE_SYSTEM)
+
+    if request.has_filename():
+      raise_error(file_service_pb.FileServiceErrors.FILE_NAME_SPECIFIED)
+
+    mime_type = None
+    blob_filename = ""
+    for param in request.parameters_list():
+      name = param.name()
+      if name == files_blobstore._MIME_TYPE_PARAMETER:
+        mime_type = param.value()
+      elif name == files_blobstore._BLOBINFO_UPLOADED_FILENAME_PARAMETER:
+        blob_filename = param.value()
+      else:
+        raise_error(file_service_pb.FileServiceErrors.INVALID_PARAMETER)
+    if mime_type is None:
+        raise_error(file_service_pb.FileServiceErrors.INVALID_PARAMETER)
+
+    random_str = ''.join(
+        random.choice(string.ascii_uppercase + string.digits)
+        for _ in range(64))
+    filename = (files_blobstore._BLOBSTORE_DIRECTORY +
+                files_blobstore._CREATION_HANDLE_PREFIX +
+                base64.urlsafe_b64encode(random_str))
+    self.file_storage.add_blobstore_file(filename, mime_type, blob_filename)
+    response.set_filename(filename)
+
   def _Dynamic_Open(self, request, response):
     """Handler for Open RPC call."""
     filename = request.filename()
     content_type = request.content_type()
     open_mode = request.open_mode()
 
-    if (filename == '/blobstore/new' or
-        filename.startswith('/blobstore/new?')):
-      if open_mode != file_service_pb.OpenRequest.READ:
-        raise_error(file_service_pb.FileServiceErrors.READ_ONLY)
-      if content_type != file_service_pb.FileContentType.RAW:
-        raise_error(file_service_pb.FileServiceErrors.WRONG_CONTENT_TYPE)
-
-      self.open_files[filename] = NewBlobstoreFile(self.file_storage)
-    elif (filename == '/blobstore/get_blob_key' or
-        filename.startswith('/blobstore/get_blob_key?')):
-      if open_mode != file_service_pb.OpenRequest.READ:
-        raise_error(file_service_pb.FileServiceErrors.READ_ONLY)
-      if content_type != file_service_pb.FileContentType.RAW:
-        raise_error(file_service_pb.FileServiceErrors.WRONG_CONTENT_TYPE)
-
-      self.open_files[filename] = GetBlobKeyFile(filename, self.file_storage)
-    elif filename.startswith('/blobstore/'):
+    if filename.startswith('/blobstore/'):
+      if request.exclusive_lock() and filename in self.open_files:
+        raise_error(file_service_pb.FileServiceErrors.EXCLUSIVE_LOCK_FAILED)
       self.open_files[filename] = BlobstoreFile(request, self.file_storage)
     else:
       raise_error(file_service_pb.FileServiceErrors.INVALID_FILE_NAME)

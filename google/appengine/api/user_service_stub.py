@@ -15,6 +15,10 @@
 # limitations under the License.
 #
 
+
+
+
+
 """Trivial implementation of the UserService."""
 
 
@@ -28,6 +32,9 @@ from google.appengine.api import user_service_pb
 _DEFAULT_LOGIN_URL = 'https://www.google.com/accounts/Login?continue=%s'
 _DEFAULT_LOGOUT_URL = 'https://www.google.com/accounts/Logout?continue=%s'
 _DEFAULT_AUTH_DOMAIN = 'gmail.com'
+
+
+
 
 _OAUTH_CONSUMER_KEY = 'example.com'
 _OAUTH_EMAIL = 'example@example.com'
@@ -58,6 +65,8 @@ class UserServiceStub(apiproxy_stub.APIProxyStub):
     self.__num_requests = 0
     self._login_url = login_url
     self._logout_url = logout_url
+
+
 
     os.environ['AUTH_DOMAIN'] = auth_domain
 
@@ -127,6 +136,7 @@ class UserServiceStub(apiproxy_stub.APIProxyStub):
     host = os.environ['SERVER_NAME']
     if os.environ['SERVER_PORT'] != '80':
       host = host + ":" + os.environ['SERVER_PORT']
+
 
     if path == '':
       path = '/'

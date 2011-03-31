@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -23,6 +25,7 @@ __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
                    unusednames=printElemNumber,debug_strs no-special"""
 
 class ImagesServiceError(ProtocolBuffer.ProtocolMessage):
+
 
   UNSPECIFIED_ERROR =    1
   BAD_TRANSFORM_DATA =    2
@@ -80,6 +83,8 @@ class ImagesServiceError(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -101,9 +106,11 @@ class ImagesServiceError(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class ImagesServiceTransform(ProtocolBuffer.ProtocolMessage):
+
 
   RESIZE       =    1
   ROTATE       =    2
@@ -161,6 +168,8 @@ class ImagesServiceTransform(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -181,6 +190,7 @@ class ImagesServiceTransform(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -518,6 +528,8 @@ class Transform(ProtocolBuffer.ProtocolMessage):
       if tt == 80:
         self.set_autolevels(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -578,6 +590,7 @@ class Transform(ProtocolBuffer.ProtocolMessage):
     9: ProtocolBuffer.Encoder.FLOAT,
     10: ProtocolBuffer.Encoder.NUMERIC,
   }, 10, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -680,6 +693,8 @@ class ImageData(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_blob_key(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -709,9 +724,11 @@ class ImageData(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class OutputSettings(ProtocolBuffer.ProtocolMessage):
+
 
   PNG          =    0
   JPEG         =    1
@@ -817,6 +834,8 @@ class OutputSettings(ProtocolBuffer.ProtocolMessage):
       if tt == 16:
         self.set_quality(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -845,6 +864,7 @@ class OutputSettings(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.NUMERIC,
     2: ProtocolBuffer.Encoder.NUMERIC,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -996,6 +1016,8 @@ class ImagesTransformRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_output().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1041,6 +1063,7 @@ class ImagesTransformRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1114,6 +1137,8 @@ class ImagesTransformResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_image().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1142,9 +1167,11 @@ class ImagesTransformResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class CompositeImageOptions(ProtocolBuffer.ProtocolMessage):
+
 
   TOP_LEFT     =    0
   TOP          =    1
@@ -1377,6 +1404,8 @@ class CompositeImageOptions(ProtocolBuffer.ProtocolMessage):
       if tt == 40:
         self.set_anchor(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1417,6 +1446,7 @@ class CompositeImageOptions(ProtocolBuffer.ProtocolMessage):
     4: ProtocolBuffer.Encoder.FLOAT,
     5: ProtocolBuffer.Encoder.NUMERIC,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1590,6 +1620,8 @@ class ImagesCanvas(ProtocolBuffer.ProtocolMessage):
       if tt == 32:
         self.set_color(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1629,6 +1661,7 @@ class ImagesCanvas(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.NUMERIC,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1786,6 +1819,8 @@ class ImagesCompositeRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_canvas().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1835,6 +1870,7 @@ class ImagesCompositeRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1908,6 +1944,8 @@ class ImagesCompositeResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_image().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1935,6 +1973,7 @@ class ImagesCompositeResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2008,6 +2047,8 @@ class ImagesHistogramRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_image().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2035,6 +2076,7 @@ class ImagesHistogramRequest(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2174,6 +2216,8 @@ class ImagesHistogram(ProtocolBuffer.ProtocolMessage):
       if tt == 24:
         self.add_blue(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2221,6 +2265,7 @@ class ImagesHistogram(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.NUMERIC,
     3: ProtocolBuffer.Encoder.NUMERIC,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2294,6 +2339,8 @@ class ImagesHistogramResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_histogram().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2321,6 +2368,7 @@ class ImagesHistogramResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2393,6 +2441,8 @@ class ImagesGetUrlBaseRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_blob_key(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2417,6 +2467,7 @@ class ImagesGetUrlBaseRequest(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2489,6 +2540,8 @@ class ImagesGetUrlBaseResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.set_url(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2513,6 +2566,7 @@ class ImagesGetUrlBaseResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

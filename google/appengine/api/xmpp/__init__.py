@@ -15,6 +15,9 @@
 # limitations under the License.
 #
 
+
+
+
 """XMPP API.
 
 This module allows AppEngine apps to interact with a bot representing that app
@@ -32,14 +35,24 @@ Classes defined in this module:
 
 
 
+
+
+
+
+
+
+
 from google.appengine.api import apiproxy_stub_map
 from google.appengine.api.xmpp import xmpp_service_pb
 from google.appengine.runtime import apiproxy_errors
 
 
+
 NO_ERROR    = xmpp_service_pb.XmppMessageResponse.NO_ERROR
 INVALID_JID = xmpp_service_pb.XmppMessageResponse.INVALID_JID
 OTHER_ERROR = xmpp_service_pb.XmppMessageResponse.OTHER_ERROR
+
+
 
 
 MESSAGE_TYPE_NONE = ""
@@ -54,12 +67,16 @@ _VALID_MESSAGE_TYPES = frozenset([MESSAGE_TYPE_NONE, MESSAGE_TYPE_CHAT,
                                   MESSAGE_TYPE_HEADLINE, MESSAGE_TYPE_NORMAL])
 
 
+
+
 PRESENCE_TYPE_AVAILABLE = ""
 PRESENCE_TYPE_UNAVAILABLE = "unavailable"
 PRESENCE_TYPE_PROBE = "probe"
 _VALID_PRESENCE_TYPES = frozenset([PRESENCE_TYPE_AVAILABLE,
                                    PRESENCE_TYPE_UNAVAILABLE,
                                    PRESENCE_TYPE_PROBE])
+
+
 
 
 PRESENCE_SHOW_NONE = ""
@@ -70,6 +87,7 @@ PRESENCE_SHOW_XA = "xa"
 _VALID_PRESENCE_SHOWS = frozenset([PRESENCE_SHOW_NONE, PRESENCE_SHOW_AWAY,
                                    PRESENCE_SHOW_CHAT, PRESENCE_SHOW_DND,
                                    PRESENCE_SHOW_XA])
+
 
 MAX_STATUS_MESSAGE_SIZE = 1024
 
@@ -379,6 +397,7 @@ class Message(object):
   def __parse_command(self):
     if self.__arg != None:
       return
+
 
     body = self.__body
     if body.startswith('\\'):

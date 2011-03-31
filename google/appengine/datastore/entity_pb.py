@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -152,6 +154,8 @@ class PropertyValue_ReferenceValuePathElement(ProtocolBuffer.ProtocolMessage):
       if tt == 138:
         self.set_name(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -264,6 +268,8 @@ class PropertyValue_PointValue(ProtocolBuffer.ProtocolMessage):
       if tt == 57:
         self.set_y(d.getDouble())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -534,6 +540,8 @@ class PropertyValue_UserValue(ProtocolBuffer.ProtocolMessage):
       if tt == 178:
         self.set_federated_provider(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -688,6 +696,8 @@ class PropertyValue_ReferenceValue(ProtocolBuffer.ProtocolMessage):
       if tt == 162:
         self.set_name_space(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -790,6 +800,7 @@ class PropertyValue(ProtocolBuffer.ProtocolMessage):
   def mutable_pointvalue(self): self.has_pointvalue_ = 1; return self.pointvalue()
 
   def clear_pointvalue(self):
+
     if self.has_pointvalue_:
       self.has_pointvalue_ = 0;
       if self.pointvalue_ is not None: self.pointvalue_.Clear()
@@ -808,6 +819,7 @@ class PropertyValue(ProtocolBuffer.ProtocolMessage):
   def mutable_uservalue(self): self.has_uservalue_ = 1; return self.uservalue()
 
   def clear_uservalue(self):
+
     if self.has_uservalue_:
       self.has_uservalue_ = 0;
       if self.uservalue_ is not None: self.uservalue_.Clear()
@@ -826,6 +838,7 @@ class PropertyValue(ProtocolBuffer.ProtocolMessage):
   def mutable_referencevalue(self): self.has_referencevalue_ = 1; return self.referencevalue()
 
   def clear_referencevalue(self):
+
     if self.has_referencevalue_:
       self.has_referencevalue_ = 0;
       if self.referencevalue_ is not None: self.referencevalue_.Clear()
@@ -975,6 +988,8 @@ class PropertyValue(ProtocolBuffer.ProtocolMessage):
       if tt == 99:
         self.mutable_referencevalue().TryMerge(d)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1078,9 +1093,11 @@ class PropertyValue(ProtocolBuffer.ProtocolMessage):
     22: ProtocolBuffer.Encoder.STRING,
   }, 22, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class Property(ProtocolBuffer.ProtocolMessage):
+
 
   BLOB         =   14
   TEXT         =   15
@@ -1320,6 +1337,8 @@ class Property(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_value().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1363,6 +1382,7 @@ class Property(ProtocolBuffer.ProtocolMessage):
     4: ProtocolBuffer.Encoder.NUMERIC,
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1496,6 +1516,8 @@ class Path_Element(ProtocolBuffer.ProtocolMessage):
       if tt == 34:
         self.set_name(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1580,6 +1602,8 @@ class Path(ProtocolBuffer.ProtocolMessage):
       if tt == 11:
         self.add_element().TryMerge(d)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1620,6 +1644,7 @@ class Path(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.NUMERIC,
     4: ProtocolBuffer.Encoder.STRING,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1758,6 +1783,8 @@ class Reference(ProtocolBuffer.ProtocolMessage):
       if tt == 162:
         self.set_name_space(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1793,6 +1820,7 @@ class Reference(ProtocolBuffer.ProtocolMessage):
     14: ProtocolBuffer.Encoder.STRING,
     20: ProtocolBuffer.Encoder.STRING,
   }, 20, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2055,6 +2083,8 @@ class User(ProtocolBuffer.ProtocolMessage):
       if tt == 58:
         self.set_federated_provider(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2104,9 +2134,11 @@ class User(ProtocolBuffer.ProtocolMessage):
     7: ProtocolBuffer.Encoder.STRING,
   }, 7, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class EntityProto(ProtocolBuffer.ProtocolMessage):
+
 
   GD_CONTACT   =    1
   GD_EVENT     =    2
@@ -2166,6 +2198,7 @@ class EntityProto(ProtocolBuffer.ProtocolMessage):
   def mutable_owner(self): self.has_owner_ = 1; return self.owner()
 
   def clear_owner(self):
+
     if self.has_owner_:
       self.has_owner_ = 0;
       if self.owner_ is not None: self.owner_.Clear()
@@ -2412,6 +2445,8 @@ class EntityProto(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.mutable_owner().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2483,6 +2518,7 @@ class EntityProto(ProtocolBuffer.ProtocolMessage):
     16: ProtocolBuffer.Encoder.STRING,
     17: ProtocolBuffer.Encoder.STRING,
   }, 17, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -2589,6 +2625,8 @@ class CompositeProperty(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.add_value(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2623,9 +2661,11 @@ class CompositeProperty(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class Index_Property(ProtocolBuffer.ProtocolMessage):
+
 
   ASCENDING    =    1
   DESCENDING   =    2
@@ -2737,6 +2777,8 @@ class Index_Property(ProtocolBuffer.ProtocolMessage):
       if tt == 32:
         self.set_direction(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2888,6 +2930,8 @@ class Index(ProtocolBuffer.ProtocolMessage):
       if tt == 40:
         self.set_ancestor(d.getBoolean())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -2934,9 +2978,11 @@ class Index(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.NUMERIC,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class CompositeIndex(ProtocolBuffer.ProtocolMessage):
+
 
   WRITE_ONLY   =    1
   READ_WRITE   =    2
@@ -3127,6 +3173,8 @@ class CompositeIndex(ProtocolBuffer.ProtocolMessage):
       if tt == 32:
         self.set_state(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -3166,6 +3214,7 @@ class CompositeIndex(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.NUMERIC,
   }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

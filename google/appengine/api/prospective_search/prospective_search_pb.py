@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+
+
 from google.net.proto import ProtocolBuffer
 import array
 import dummy_thread as thread
@@ -24,6 +26,7 @@ __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
 
 from google.appengine.datastore.entity_pb import EntityProto
 class SchemaEntry(ProtocolBuffer.ProtocolMessage):
+
 
   STRING       =    1
   INT32        =    2
@@ -179,6 +182,8 @@ class SchemaEntry(ProtocolBuffer.ProtocolMessage):
       if tt == 24:
         self.set_meaning(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -211,6 +216,7 @@ class SchemaEntry(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.NUMERIC,
     3: ProtocolBuffer.Encoder.NUMERIC,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -428,6 +434,8 @@ class SubscribeRequest(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_schema_entry().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -476,6 +484,7 @@ class SubscribeRequest(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class SubscribeResponse(ProtocolBuffer.ProtocolMessage):
@@ -516,6 +525,8 @@ class SubscribeResponse(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -536,6 +547,7 @@ class SubscribeResponse(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -643,6 +655,8 @@ class UnsubscribeRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 18:
         self.set_sub_id(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -671,6 +685,7 @@ class UnsubscribeRequest(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
     2: ProtocolBuffer.Encoder.STRING,
   }, 2, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -712,6 +727,8 @@ class UnsubscribeResponse(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -733,9 +750,11 @@ class UnsubscribeResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class SubscriptionRecord(ProtocolBuffer.ProtocolMessage):
+
 
   OK           =    0
   PENDING      =    1
@@ -951,6 +970,8 @@ class SubscriptionRecord(ProtocolBuffer.ProtocolMessage):
       if tt == 42:
         self.set_error_message(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -992,6 +1013,7 @@ class SubscriptionRecord(ProtocolBuffer.ProtocolMessage):
     5: ProtocolBuffer.Encoder.STRING,
   }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
@@ -1003,6 +1025,8 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
   expires_before_ = 0
   has_subscription_id_start_ = 0
   subscription_id_start_ = ""
+  has_app_id_ = 0
+  app_id_ = ""
 
   def __init__(self, contents=None):
     if contents is not None: self.MergeFromString(contents)
@@ -1059,6 +1083,19 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
 
   def has_subscription_id_start(self): return self.has_subscription_id_start_
 
+  def app_id(self): return self.app_id_
+
+  def set_app_id(self, x):
+    self.has_app_id_ = 1
+    self.app_id_ = x
+
+  def clear_app_id(self):
+    if self.has_app_id_:
+      self.has_app_id_ = 0
+      self.app_id_ = ""
+
+  def has_app_id(self): return self.has_app_id_
+
 
   def MergeFrom(self, x):
     assert x is not self
@@ -1066,6 +1103,7 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if (x.has_max_results()): self.set_max_results(x.max_results())
     if (x.has_expires_before()): self.set_expires_before(x.expires_before())
     if (x.has_subscription_id_start()): self.set_subscription_id_start(x.subscription_id_start())
+    if (x.has_app_id()): self.set_app_id(x.app_id())
 
   def Equals(self, x):
     if x is self: return 1
@@ -1077,6 +1115,8 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if self.has_expires_before_ and self.expires_before_ != x.expires_before_: return 0
     if self.has_subscription_id_start_ != x.has_subscription_id_start_: return 0
     if self.has_subscription_id_start_ and self.subscription_id_start_ != x.subscription_id_start_: return 0
+    if self.has_app_id_ != x.has_app_id_: return 0
+    if self.has_app_id_ and self.app_id_ != x.app_id_: return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -1093,6 +1133,7 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if (self.has_max_results_): n += 1 + self.lengthVarInt64(self.max_results_)
     if (self.has_expires_before_): n += 1 + self.lengthVarInt64(self.expires_before_)
     if (self.has_subscription_id_start_): n += 1 + self.lengthString(len(self.subscription_id_start_))
+    if (self.has_app_id_): n += 1 + self.lengthString(len(self.app_id_))
     return n + 1
 
   def ByteSizePartial(self):
@@ -1103,6 +1144,7 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if (self.has_max_results_): n += 1 + self.lengthVarInt64(self.max_results_)
     if (self.has_expires_before_): n += 1 + self.lengthVarInt64(self.expires_before_)
     if (self.has_subscription_id_start_): n += 1 + self.lengthString(len(self.subscription_id_start_))
+    if (self.has_app_id_): n += 1 + self.lengthString(len(self.app_id_))
     return n
 
   def Clear(self):
@@ -1110,6 +1152,7 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     self.clear_max_results()
     self.clear_expires_before()
     self.clear_subscription_id_start()
+    self.clear_app_id()
 
   def OutputUnchecked(self, out):
     out.putVarInt32(10)
@@ -1123,6 +1166,9 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if (self.has_subscription_id_start_):
       out.putVarInt32(34)
       out.putPrefixedString(self.subscription_id_start_)
+    if (self.has_app_id_):
+      out.putVarInt32(42)
+      out.putPrefixedString(self.app_id_)
 
   def OutputPartial(self, out):
     if (self.has_topic_):
@@ -1137,6 +1183,9 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if (self.has_subscription_id_start_):
       out.putVarInt32(34)
       out.putPrefixedString(self.subscription_id_start_)
+    if (self.has_app_id_):
+      out.putVarInt32(42)
+      out.putPrefixedString(self.app_id_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
@@ -1153,6 +1202,11 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 34:
         self.set_subscription_id_start(d.getPrefixedString())
         continue
+      if tt == 42:
+        self.set_app_id(d.getPrefixedString())
+        continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1163,6 +1217,7 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     if self.has_max_results_: res+=prefix+("max_results: %s\n" % self.DebugFormatInt64(self.max_results_))
     if self.has_expires_before_: res+=prefix+("expires_before: %s\n" % self.DebugFormatInt64(self.expires_before_))
     if self.has_subscription_id_start_: res+=prefix+("subscription_id_start: %s\n" % self.DebugFormatString(self.subscription_id_start_))
+    if self.has_app_id_: res+=prefix+("app_id: %s\n" % self.DebugFormatString(self.app_id_))
     return res
 
 
@@ -1173,6 +1228,7 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
   kmax_results = 2
   kexpires_before = 3
   ksubscription_id_start = 4
+  kapp_id = 5
 
   _TEXT = _BuildTagLookupTable({
     0: "ErrorCode",
@@ -1180,7 +1236,8 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     2: "max_results",
     3: "expires_before",
     4: "subscription_id_start",
-  }, 4)
+    5: "app_id",
+  }, 5)
 
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
@@ -1188,7 +1245,9 @@ class ListSubscriptionsRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.NUMERIC,
     3: ProtocolBuffer.Encoder.NUMERIC,
     4: ProtocolBuffer.Encoder.STRING,
-  }, 4, ProtocolBuffer.Encoder.MAX_TYPE)
+    5: ProtocolBuffer.Encoder.STRING,
+  }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1268,6 +1327,8 @@ class ListSubscriptionsResponse(ProtocolBuffer.ProtocolMessage):
         d.skip(length)
         self.add_subscription().TryMerge(tmp)
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1299,6 +1360,7 @@ class ListSubscriptionsResponse(ProtocolBuffer.ProtocolMessage):
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1426,6 +1488,8 @@ class ListTopicsRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 26:
         self.set_app_id(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1458,6 +1522,7 @@ class ListTopicsRequest(ProtocolBuffer.ProtocolMessage):
     2: ProtocolBuffer.Encoder.NUMERIC,
     3: ProtocolBuffer.Encoder.STRING,
   }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
@@ -1529,6 +1594,8 @@ class ListTopicsResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 10:
         self.add_topic(d.getPrefixedString())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1559,9 +1626,11 @@ class ListTopicsResponse(ProtocolBuffer.ProtocolMessage):
     1: ProtocolBuffer.Encoder.STRING,
   }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class MatchRequest(ProtocolBuffer.ProtocolMessage):
+
 
   ENTITY       =    1
   MODEL        =    2
@@ -1843,6 +1912,8 @@ class MatchRequest(ProtocolBuffer.ProtocolMessage):
       if tt == 56:
         self.set_result_python_document_class(d.getVarInt32())
         continue
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1895,6 +1966,7 @@ class MatchRequest(ProtocolBuffer.ProtocolMessage):
     7: ProtocolBuffer.Encoder.NUMERIC,
   }, 7, ProtocolBuffer.Encoder.MAX_TYPE)
 
+
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
 class MatchResponse(ProtocolBuffer.ProtocolMessage):
@@ -1935,6 +2007,8 @@ class MatchResponse(ProtocolBuffer.ProtocolMessage):
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
+
+
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
       d.skipData(tt)
 
@@ -1955,6 +2029,7 @@ class MatchResponse(ProtocolBuffer.ProtocolMessage):
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
   }, 0, ProtocolBuffer.Encoder.MAX_TYPE)
+
 
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""

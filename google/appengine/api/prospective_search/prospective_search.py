@@ -15,6 +15,10 @@
 # limitations under the License.
 #
 
+
+
+
+
 """ProspectiveSearch API.
 
 A service that enables AppEngine apps to match queries to documents.
@@ -27,6 +31,14 @@ Functions defined in this module:
   list_topics: Lists topics that have subscriptions.
   match: Match all subscribed queries to document.
 """
+
+
+
+
+
+
+
+
 
 
 
@@ -67,7 +79,7 @@ from google.appengine.runtime import apiproxy_errors
 from google.appengine.datastore import entity_pb
 
 DEFAULT_RESULT_BATCH_SIZE = 100
-DEFAULT_LEASE_DURATION_SEC = 24 * 3600
+DEFAULT_LEASE_DURATION_SEC = 0
 DEFAULT_LIST_SUBSCRIPTIONS_MAX_RESULTS = 1000
 DEFAULT_LIST_TOPICS_MAX_RESULTS = 1000
 
@@ -93,6 +105,7 @@ def subscription_state_name(x):
 
 def _GetSchemaEntryForPropertyType(property_type):
   """Converts db.Model type to internal schema type."""
+
   from google.appengine.ext import db
   _MODEL_TYPE_TO_SCHEMA_ENTRY = {
       db.StringProperty: (_schema_type.STRING, None),
@@ -121,6 +134,7 @@ def _GetModelTypeForListPropertyType(property_type):
 
 def _GetModelTypeForEntityType(python_type):
   """Converts python built in type to db.Model type."""
+
   from google.appengine.ext import db
   _PYTHON_TYPE_TO_MODEL_TYPE = {
       basestring: db.StringProperty,
@@ -257,6 +271,7 @@ def _entity_schema_to_prospective_search_schema(schema, add_entry):
 
 def _model_to_prospective_search_schema(model, add_entry):
   """Produce SchemaEntries from db.Model class."""
+
   from google.appengine.ext import db
   for name, model_property in model.properties().iteritems():
     model_class = model_property.__class__
@@ -273,11 +288,11 @@ def subscribe(document_class,
               lease_duration_sec=DEFAULT_LEASE_DURATION_SEC):
   """Subscribe a query.
 
-  If the document_class is a db.Entity, a schema must be specified to map
-  document_class member names to the prospective_search supported types.
-  For example, the db.Entity 'person' has the following schema:
+  If the document_class is a datastore.Entity, a schema must be specified to
+  map document_class member names to the prospective_search supported types.
+  For example, the datastore.Entity 'person' has the following schema:
 
-  person = db.Entity('person')
+  person = datastore.Entity('person')
   person['first_name'] = 'Andrew'
   person['surname'] = 'Smith'
   person['height'] = 150
@@ -288,22 +303,24 @@ def subscribe(document_class,
   }
 
   Args:
-    document_class: db.Entity or db.Model class.
+    document_class: datastore.Entity or db.Model class.
     query: str or unicode query for documents of type document_class.
     sub_id: subscription id returned when this subscription is matched.
-    schema: required for db.Entity document_class.
-    topic: required for db.Entity document_class, optional for db.Model.
+    schema: required for datastore.Entity document_class.
+    topic: required for datastore.Entity document_class, optional for db.Model.
         If not specified for db.Model, topic is assumed to be the class name.
         Only documents of same topic will be matched against this subscription.
     lease_duration_sec: minimum number of seconds subscription should exist.
+        0 indicates subscription never expires (default).
 
   Raises:
     DocumentTypeError: document type is unsupported.
-    TopicNotSpecified: raised for db.Entity if topic is not specified.
+    TopicNotSpecified: raised for datastore.Entity if topic is not specified.
     QuerySyntaxError: raised when query is invalid or does not match schema.
     SchemaError: schema is invalid.
     apiproxy_errors.Error: subscribe call failed.
   """
+
   from google.appengine.ext import db
 
   request = prospective_search_pb.SubscribeRequest()
@@ -311,10 +328,12 @@ def subscribe(document_class,
   request.set_vanilla_query(unicode(query).encode('utf-8'))
   request.set_lease_duration_sec(lease_duration_sec)
 
+
   if issubclass(document_class, db.Model):
     topic = _get_document_topic(document_class, topic)
     _model_to_prospective_search_schema(document_class,
                                         request.add_schema_entry)
+
   elif issubclass(document_class, datastore.Entity):
     if not topic:
       raise TopicNotSpecified()
@@ -337,16 +356,17 @@ def unsubscribe(document_class, sub_id, topic=None):
   """Unsubscribe a query.
 
   Args:
-    document_class: db.Entity or db.Model class.
+    document_class: datastore.Entity or db.Model class.
     sub_id: subscription id to remove.
-    topic: required for db.Entity document_class, optional for db.Model.
+    topic: required for datastore.Entity document_class, optional for db.Model.
         Topic must be same as used in the subscribe call for this subscription.
 
   Raises:
     DocumentTypeError: document type is unsupported.
-    TopicNotSpecified: raised for db.Entity if topic is not specified.
+    TopicNotSpecified: raised for datastore.Entity if topic is not specified.
     apiproxy_errors.Error: unsubscribe call failed.
   """
+
   from google.appengine.ext import db
 
   request = prospective_search_pb.UnsubscribeRequest()
@@ -367,9 +387,9 @@ def get_subscription(document_class, sub_id, topic=None):
   """Get subscription information.
 
   Args:
-    document_class: db.Entity or db.Model class.
+    document_class: datastore.Entity or db.Model class.
     sub_id: subscription id to lookup.
-    topic: required for db.Entity document_class, optional for db.Model.
+    topic: required for datastore.Entity document_class, optional for db.Model.
 
   Returns:
     Tuple containing:
@@ -382,7 +402,7 @@ def get_subscription(document_class, sub_id, topic=None):
    Raises:
     DocumentTypeError: document type is unsupported.
     SubscriptionDoesNotExist: if subscription of specified id does not exist.
-    TopicNotSpecified: raised for db.Entity if topic is not specified.
+    TopicNotSpecified: raised for datastore.Entity if topic is not specified.
     apiproxy_errors.Error: call failed.
   """
   subscriptions = list_subscriptions(document_class, sub_id, topic=topic,
@@ -400,10 +420,10 @@ def list_subscriptions(document_class,
   """List subscriptions on a topic.
 
   Args:
-    document_class: db.Entity or db.Model class.
+    document_class: datastore.Entity or db.Model class.
     sub_id_start: return only subscriptions that are lexicographically equal or
         greater than the specified value.
-    topic: required for db.Entity document_class, optional for db.Model.
+    topic: required for datastore.Entity document_class, optional for db.Model.
     max_results: maximum number of subscriptions to return.
     expires_before: when set, limits list to subscriptions which will
         expire no later than expires_before (epoch time).
@@ -417,12 +437,13 @@ def list_subscriptions(document_class,
 
   Raises:
     DocumentTypeError: document type is unsupported.
-    TopicNotSpecified: raised for db.Entity if topic is not specified.
+    TopicNotSpecified: raised for datastore.Entity if topic is not specified.
     apiproxy_errors.Error: list call failed.
   """
+
+
   from google.appengine.ext import db
 
-  request = prospective_search_pb.ListSubscriptionsRequest()
   if issubclass(document_class, db.Model):
     topic = _get_document_topic(document_class, topic)
   elif issubclass(document_class, datastore.Entity):
@@ -430,21 +451,10 @@ def list_subscriptions(document_class,
       raise TopicNotSpecified()
   else:
     raise DocumentTypeError()
-  request.set_topic(topic)
-  request.set_subscription_id_start(sub_id_start)
-  request.set_max_results(max_results)
-  if expires_before:
-    request.set_expires_before(expires_before)
-  response = prospective_search_pb.ListSubscriptionsResponse()
-  _make_sync_call('matcher', 'ListSubscriptions', request, response)
-  subscriptions = []
-  for sub in response.subscription_list():
-    subscriptions.append((sub.id(),
-                          sub.vanilla_query(),
-                          sub.expiration_time_sec(),
-                          sub.state(),
-                          sub.error_message()))
-  return subscriptions
+
+  return prospective_search_admin.list_subscriptions(topic, max_results, None,
+                                                     sub_id_start,
+                                                     expires_before)
 
 
 def list_topics(max_results=DEFAULT_LIST_TOPICS_MAX_RESULTS,
@@ -457,7 +467,8 @@ def list_topics(max_results=DEFAULT_LIST_TOPICS_MAX_RESULTS,
   Returns:
     List of topics (strings)
   """
-  return prospective_search_admin.list_topics(None, max_results, topic_start)
+  return prospective_search_admin.list_topics(max_results,
+                                              topic_start=topic_start)
 
 
 def match(document,
@@ -470,8 +481,8 @@ def match(document,
   """Match document with all subscribed queries on specified topic.
 
   Args:
-    document: instance of db.Entity or db.Model document.
-    topic: required for db.Entity, optional for db.Model.
+    document: instance of datastore.Entity or db.Model document.
+    topic: required for datastore.Entity, optional for db.Model.
         Only subscriptions of this topic will be matched against this document.
     result_key: key to return in result, potentially to identify document.
     result_relative_url: url of taskqueue event handler for results.
@@ -481,9 +492,10 @@ def match(document,
 
   Raises:
     DocumentTypeError: document type is unsupported.
-    TopicNotSpecified: raised for db.Entity if topic is not specified.
+    TopicNotSpecified: raised for datastore.Entity if topic is not specified.
     apiproxy_errors.Error: match call failed.
   """
+
   from google.appengine.ext import db
 
   request = prospective_search_pb.MatchRequest()
@@ -517,12 +529,12 @@ def get_document(request):
     request: received POST request
 
   Returns:
-    document: original db.Entity or db.Model document from match call.
+    document: original datastore.Entity or db.Model document from match call.
 
   Raises:
-    ProtocolBufferDecodeError:
     DocumentTypeError:
   """
+
   from google.appengine.ext import db
 
   doc_class = request.get('python_document_class')
