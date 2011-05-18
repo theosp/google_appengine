@@ -27,6 +27,47 @@
 
 
 
+from google.appengine.api import apiproxy_stub_map
+from google.appengine.api.system import system_service_pb
+
+
+def cpu_usage():
+  """Returns a SystemStat describing cpu usage, expressed in mcycles.
+
+  The returned object has the following accessors:
+
+    - total(): total mcycles consumed by this instance
+    - rate1m(): average mcycles consumed per second over the last minute
+    - rate10m(): average mcycles consumed per second over the last ten minutes
+    - rate1h(): average mcycles consumed per second over the last hour
+
+  Functions for converting from mcycles to cpu-seconds are located in the quotas
+  API.
+  """
+  return _GetSystemStats().cpu()
+
+
+def memory_usage():
+  """Returns a SystemStat describing memory usage, expressed in bytes.
+
+  The returned object has the following accessors:
+
+    - current(): memory currently used by this instance
+    - average1m(): average memory use, over the last minute
+    - average10m(): average memory use, over the last ten minutes
+    - average1h(): average memory use, over the last hour
+  """
+  return _GetSystemStats().memory()
+
+
+def _GetSystemStats():
+  """Returns stats about the current instance."""
+  request = system_service_pb.GetSystemStatsRequest()
+  response = system_service_pb.GetSystemStatsResponse()
+  apiproxy_stub_map.MakeSyncCall('system', 'GetSystemStats', request, response)
+  return response
+
+
 __shutdown_hook = None
 __shuting_down = False
 
