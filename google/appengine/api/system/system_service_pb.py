@@ -24,15 +24,24 @@ import dummy_thread as thread
 __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
                    unusednames=printElemNumber,debug_strs no-special"""
 
+if hasattr(ProtocolBuffer, 'ExtendableProtocolMessage'):
+  _extension_runtime = True
+  _ExtendableProtocolMessage = ProtocolBuffer.ExtendableProtocolMessage
+else:
+  _extension_runtime = False
+  _ExtendableProtocolMessage = ProtocolBuffer.ProtocolMessage
+
 class SystemServiceError(ProtocolBuffer.ProtocolMessage):
 
 
   OK           =    0
   INTERNAL_ERROR =    1
+  BACKEND_REQUIRED =    2
 
   _ErrorCode_NAMES = {
     0: "OK",
     1: "INTERNAL_ERROR",
+    2: "BACKEND_REQUIRED",
   }
 
   def ErrorCode_Name(cls, x): return cls._ErrorCode_NAMES.get(x, "")
@@ -752,5 +761,7 @@ class StartBackgroundRequestResponse(ProtocolBuffer.ProtocolMessage):
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
   _PROTO_DESCRIPTOR_NAME = 'apphosting.StartBackgroundRequestResponse'
+if _extension_runtime:
+  pass
 
 __all__ = ['SystemServiceError','SystemStat','GetSystemStatsRequest','GetSystemStatsResponse','StartBackgroundRequestRequest','StartBackgroundRequestResponse']

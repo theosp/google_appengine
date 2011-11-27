@@ -35,6 +35,7 @@
 
 __all__ = [
     "AbstractDatastoreInputReader",
+    "ALLOW_CHECKPOINT",
     "BadReaderParamsError",
     "BlobstoreLineInputReader",
     "BlobstoreZipInputReader",
@@ -85,6 +86,11 @@ COUNTER_IO_READ_BYTES = "io-read-bytes"
 
 
 COUNTER_IO_READ_MSEC = "io-read-msec"
+
+
+
+
+ALLOW_CHECKPOINT = object()
 
 
 class InputReader(model.JsonMixin):
@@ -289,6 +295,7 @@ class AbstractDatastoreInputReader(InputReader):
         namespace = namespace_result[0].name() or ""
         self._current_key_range = key_range.KeyRange(
             namespace=namespace, _app=self._ns_range.app)
+        yield ALLOW_CHECKPOINT
 
       for key, o in self._iter_key_range(
           copy.deepcopy(self._current_key_range)):
@@ -360,12 +367,14 @@ class AbstractDatastoreInputReader(InputReader):
                                keys_only=True)
     ds_query.Order("__scatter__")
     random_keys = ds_query.Get(shard_count * cls._OVERSAMPLING_FACTOR)
-    if not random_keys or len(random_keys) < shard_count:
+
+    if not random_keys:
 
 
       return ([key_range.KeyRange(namespace=namespace, _app=app)] +
-          [None] * (shard_count - 1))
-    else:
+              [None] * (shard_count - 1))
+    if len(random_keys) >= shard_count:
+
       random_keys = cls._choose_split_points(random_keys, shard_count)
 
     key_ranges = []
@@ -397,6 +406,10 @@ class AbstractDatastoreInputReader(InputReader):
         include_end=False,
         namespace=namespace,
         _app=app))
+
+    if len(key_ranges) < shard_count:
+
+      key_ranges = key_ranges + [None] * (shard_count - len(key_ranges))
 
     return key_ranges
 
@@ -1274,25 +1287,42 @@ class ConsistentKeyReader(DatastoreKeyInputReader):
     if self._ns_range is None:
 
 
-      while True:
-
-
-
-        unapplied_query = k_range.make_ascending_datastore_query(
-            kind=None, keys_only=True)
-        unapplied_query[
-            ConsistentKeyReader.UNAPPLIED_LOG_FILTER] = self.start_time_us
-
-        unapplied_jobs = unapplied_query.Get(
-            limit=self._batch_size,
-            config=datastore_rpc.Configuration(
-                deadline=self.UNAPPLIED_QUERY_DEADLINE))
-        if not unapplied_jobs:
-          break
-        self._apply_jobs(unapplied_jobs)
+      self._apply_key_range(k_range)
 
     for o in super(ConsistentKeyReader, self)._iter_key_range(k_range):
       yield o
+
+  def _apply_key_range(self, k_range):
+    """Apply all jobs in the given KeyRange."""
+
+
+
+
+
+    apply_range = copy.deepcopy(k_range)
+    while True:
+
+
+
+      unapplied_query = self._make_unapplied_query(apply_range)
+      unapplied_jobs = unapplied_query.Get(
+          limit=self._batch_size,
+          config=datastore_rpc.Configuration(
+              deadline=self.UNAPPLIED_QUERY_DEADLINE))
+      if not unapplied_jobs:
+        break
+      self._apply_jobs(unapplied_jobs)
+
+
+      apply_range.advance(unapplied_jobs[-1])
+
+  def _make_unapplied_query(self, k_range):
+    """Returns a datastore.Query that finds the unapplied keys in k_range."""
+    unapplied_query = k_range.make_ascending_datastore_query(
+        kind=None, keys_only=True)
+    unapplied_query[
+        ConsistentKeyReader.UNAPPLIED_LOG_FILTER] = self.start_time_us
+    return unapplied_query
 
   def _apply_jobs(self, unapplied_jobs):
     """Apply all jobs implied by the given keys."""

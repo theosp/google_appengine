@@ -45,6 +45,7 @@ from google.appengine.runtime import apiproxy_errors
 
 __all__ = ['BLOB_INFO_KIND',
            'BLOB_KEY_HEADER',
+           'BLOB_MIGRATION_KIND',
            'BLOB_RANGE_HEADER',
            'MAX_BLOB_FETCH_SIZE',
            'UPLOAD_INFO_CREATION_HEADER',
@@ -52,6 +53,7 @@ __all__ = ['BLOB_INFO_KIND',
            'BlobKey',
            'BlobNotFoundError',
            'DataIndexOutOfRangeError',
+           'PermissionDeniedError',
            'Error',
            'InternalError',
            'create_upload_url',
@@ -67,6 +69,8 @@ BlobKey = datastore_types.BlobKey
 BLOB_INFO_KIND = '__BlobInfo__'
 
 BLOB_KEY_HEADER = 'X-AppEngine-BlobKey'
+
+BLOB_MIGRATION_KIND = '__BlobMigration__'
 
 BLOB_RANGE_HEADER = 'X-AppEngine-BlobRange'
 
@@ -101,6 +105,11 @@ class _CreationFormatError(Error):
   """Raised when attempting to parse bad creation date format."""
 
 
+class PermissionDeniedError(Error):
+  """Raised when permissions are lacking for a requested operation."""
+
+
+
 def _ToBlobstoreError(error):
   """Translate an application error to a datastore Error, if possible.
 
@@ -116,12 +125,11 @@ def _ToBlobstoreError(error):
       DataIndexOutOfRangeError,
       blobstore_service_pb.BlobstoreServiceError.BLOB_FETCH_SIZE_TOO_LARGE:
       BlobFetchSizeTooLargeError,
+      blobstore_service_pb.BlobstoreServiceError.PERMISSION_DENIED:
+      PermissionDeniedError,
       }
-
-  if error.application_error in error_map:
-    return error_map[error.application_error](error.error_detail)
-  else:
-    return error
+  desired_exc = error_map.get(error.application_error)
+  return desired_exc(error.error_detail) if desired_exc else error
 
 
 def _format_creation(stamp):
@@ -190,7 +198,8 @@ def _parse_creation(creation_string, field_name):
 
 def create_upload_url(success_path,
                       _make_sync_call=None,
-                      **kwargs):
+                      max_bytes_per_blob=None,
+                      max_bytes_total=None):
   """Create upload URL for POST form.
 
   Args:
@@ -211,25 +220,20 @@ def create_upload_url(success_path,
   response = blobstore_service_pb.CreateUploadURLResponse()
   request.set_success_path(success_path)
 
-  make_sync_call = kwargs.pop('_make_sync_call',
-                               apiproxy_stub_map.MakeSyncCall)
-
-  if _make_sync_call:
-    if callable(_make_sync_call):
-      make_sync_call = _make_sync_call
-    else:
+  if _make_sync_call is not None:
+    if not callable(_make_sync_call):
       raise TypeError('_make_sync_call must be callable')
+  else:
+    _make_sync_call = apiproxy_stub_map.MakeSyncCall
 
-  if 'max_bytes_per_blob' in kwargs:
-    max_bytes_per_blob = kwargs.pop('max_bytes_per_blob')
+  if max_bytes_per_blob is not None:
     if not isinstance(max_bytes_per_blob, (int, long)):
       raise TypeError('max_bytes_per_blob must be integer.')
     if max_bytes_per_blob < 1:
       raise ValueError('max_bytes_per_blob must be positive.')
     request.set_max_upload_size_per_blob_bytes(max_bytes_per_blob)
 
-  if 'max_bytes_total' in kwargs:
-    max_bytes_total = kwargs.pop('max_bytes_total')
+  if max_bytes_total is not None:
     if not isinstance(max_bytes_total, (int, long)):
       raise TypeError('max_bytes_total must be integer.')
     if max_bytes_total < 1:
@@ -244,7 +248,7 @@ def create_upload_url(success_path,
                        ' than max_upload_size_per_blob_bytes')
 
   try:
-    make_sync_call('blobstore', 'CreateUploadURL', request, response)
+    _make_sync_call('blobstore', 'CreateUploadURL', request, response)
   except apiproxy_errors.ApplicationError, e:
     raise _ToBlobstoreError(e)
 

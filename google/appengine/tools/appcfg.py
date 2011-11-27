@@ -89,7 +89,7 @@ NAG_FILE = '.appcfg_nag'
 MAX_LOG_LEVEL = 4
 
 
-MAX_BATCH_SIZE = 1000000
+MAX_BATCH_SIZE = 3200000
 MAX_BATCH_COUNT = 100
 MAX_BATCH_FILE_SIZE = 200000
 BATCH_OVERHEAD = 500
@@ -112,6 +112,17 @@ DAY = 24*3600
 SUNDAY = 6
 
 SUPPORTED_RUNTIMES = ('go', 'python', 'python27')
+
+
+
+
+MB = 1024 * 1024
+DEFAULT_RESOURCE_LIMITS = {
+    'max_file_size': 32 * MB,
+    'max_blob_size': 32 * MB,
+    'max_total_file_size': 150 * MB,
+    'max_file_count': 10000,
+}
 
 
 def PrintUpdate(msg):
@@ -235,6 +246,52 @@ def BuildClonePostBody(file_tuples):
     tup = tup[1:]
     file_list.append(TUPLE_DELIMITER.join([path] + list(tup)))
   return LIST_DELIMITER.join(file_list)
+
+
+def GetRemoteResourceLimits(rpcserver):
+  """Get the resource limit as reported by the admin console.
+
+  Get the resource limits by querying the admin_console/appserver. The
+  actual limits returned depends on the server we are talking to and
+  could be missing values we expect or include extra values.
+
+  Args:
+    rpcserver: The RPC server to use.
+
+  Returns:
+    A dictionary.
+  """
+  try:
+    yaml_data = rpcserver.Send('/api/appversion/getresourcelimits')
+
+  except urllib2.HTTPError, err:
+
+
+
+    if err.code != 404:
+      raise
+    return {}
+
+  return yaml.safe_load(yaml_data)
+
+
+def GetResourceLimits(rpcserver):
+  """Gets the resource limits.
+
+  Gets the resource limits that should be applied to apps. Any values
+  that the server does not know about will have their default value
+  reported (although it is also possible for the server to report
+  values we don't know about).
+
+  Args:
+    rpcserver: The RPC server to use.
+
+  Returns:
+    A dictionary.
+  """
+  resource_limits = DEFAULT_RESOURCE_LIMITS.copy()
+  resource_limits.update(GetRemoteResourceLimits(rpcserver))
+  return resource_limits
 
 
 class NagFile(validation.Validated):
@@ -470,7 +527,8 @@ class UpdateCheck(object):
                                      timeout=UPDATE_CHECK_TIMEOUT,
                                      release=version['release'],
                                      timestamp=version['timestamp'],
-                                     api_versions=version['api_versions'])
+                                     api_versions=version['api_versions'],
+                                     runtime=self.config.runtime)
     except urllib2.URLError, e:
       logging.info('Update check failed: %s', e)
       return
@@ -2848,7 +2906,7 @@ class AppCfgApp(object):
       parser: An instance of OptionsParser.
     """
     parser.add_option('-S', '--max_size', type='int', dest='max_size',
-                      default=10485760, metavar='SIZE',
+                      default=32000000, metavar='SIZE',
                       help='Maximum size of a file to upload.')
     parser.add_option('--no_precompilation', action='store_false',
                       dest='precompilation', default=True,
@@ -3517,6 +3575,14 @@ class AppCfgApp(object):
                       help='The name of the file where the generated template'
                       ' is to be written. (Required)')
 
+  def ResourceLimitsInfo(self, output=None):
+    """Outputs the current resource limits."""
+    resource_limits = GetResourceLimits(self._GetRpcServer())
+
+
+    for attr_name in sorted(resource_limits):
+      print >>output, '%s: %s' % (attr_name, resource_limits[attr_name])
+
   class Action(object):
     """Contains information about a command line action.
 
@@ -3781,6 +3847,15 @@ template for use with upload_data or download_data.""",
 The 'set_default_version' command sets the default (serving) version of the app.
 Defaults to using the version specified in app.yaml; use the --version flag to
 override this."""),
+
+      'resource_limits_info': Action(
+          function='ResourceLimitsInfo',
+          usage='%prog [options] resource_limits_info <directory>',
+          short_desc='Get the resource limits.',
+          long_desc="""
+The 'resource_limits_info' command prints the current resource limits that
+are enforced.""",
+          uses_basepath=False),
 
 
   }

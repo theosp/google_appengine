@@ -21,32 +21,9 @@
 """Wrapper for QueryParser."""
 
 
-import google
-import antlr3
-
+from google.appengine._internal import antlr3
 from google.appengine.api.search import QueryLexer
 from google.appengine.api.search import QueryParser
-
-
-_OPERATOR_MAP = {
-    QueryParser.CONJUNCTION: 'AND',
-    QueryParser.DISJUNCTION: 'OR',
-    QueryParser.NEGATION: 'NOT',
-    QueryParser.NONE: 'None',
-    QueryParser.NUMBER: 'Number',
-    QueryParser.RESTRICTION: 'Restrict',
-    QueryParser.STRING: 'String',
-    QueryParser.WORD: 'Word',
-    QueryParser.VALUE: 'Value',
-    QueryParser.TEXT: 'Text',
-    QueryParser.EOF: 'EOF',
-    QueryParser.LT: '<',
-    QueryParser.LE: '<=',
-    QueryParser.GT: '>',
-    QueryParser.GE: '>=',
-    QueryParser.SELECTOR: 'Selector',
-    QueryParser.PHRASE: 'Phrase',
-    QueryParser.INT: 'Int'}
 
 
 class QueryException(Exception):
@@ -96,19 +73,13 @@ def CreateParser(query):
   return parser
 
 
-def _Parse(query):
+def Parse(query):
+  """Parses a query and returns an ANTLR tree."""
   parser = CreateParser(query)
   try:
     return parser.query()
   except Exception, e:
     raise QueryException(e.message)
-
-
-def _TypeToString(node_type):
-  """Converts a node_type to a string."""
-  if node_type in _OPERATOR_MAP.keys():
-    return _OPERATOR_MAP[node_type]
-  return 'unknown operator: ' + str(node_type)
 
 
 def Simplify(parser_return):
@@ -127,38 +98,16 @@ def _SimplifyNode(node):
   elif node.getType() is QueryParser.DISJUNCTION and node.getChildCount() is 1:
     return _SimplifyNode(node.children[0])
   elif (node.getType() is QueryParser.RESTRICTION and node.getChildCount() is 2
-        and node.children[0].getType() is QueryParser.NONE):
+        and node.children[0].getType() is QueryParser.GLOBAL):
     return _SimplifyNode(node.children[1])
   elif (node.getType() is QueryParser.VALUE and node.getChildCount() is 2 and
         (node.children[0].getType() is QueryParser.WORD or
          node.children[0].getType() is QueryParser.STRING or
          node.children[0].getType() is QueryParser.NUMBER)):
     return _SimplifyNode(node.children[1])
+  elif ((node.getType() is QueryParser.EQ or node.getType() is QueryParser.HAS)
+        and node.getChildCount() is 1):
+    return _SimplifyNode(node.children[0])
   for i, child in enumerate(node.children):
     node.setChild(i, _SimplifyNode(child))
   return node
-
-
-def ToString(node):
-  """Translates the node in a parse tree into a query string fragment."""
-  output = ''
-  if node.getChildCount():
-    output += '('
-  if (node.getType() is QueryParser.TEXT or
-      node.getType() is QueryParser.SELECTOR or
-      node.getType() is QueryParser.PHRASE or
-      node.getType() is QueryParser.INT):
-    output += node.getText()
-  else:
-    output += _TypeToString(node.getType())
-  if node.getChildCount():
-    output += ' '
-  output += ' '.join([ToString(child) for child in node.children])
-  if node.getChildCount():
-    output += ')'
-  return output
-
-
-def Parse(query):
-  """Parses a query and simplifies the parse tree."""
-  return Simplify(_Parse(query))

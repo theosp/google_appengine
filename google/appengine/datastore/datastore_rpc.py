@@ -51,6 +51,7 @@ __all__ = ['AbstractAdapter',
 
 
 import collections
+import functools
 import logging
 
 
@@ -80,6 +81,7 @@ def _positional(max_pos_args):
   Note that for methods, n includes 'self'.
   """
   def positional_decorator(wrapped):
+    @functools.wraps(wrapped)
     def positional_wrapper(*args, **kwds):
       if len(args) > max_pos_args:
         plural_s = ''
@@ -1191,7 +1193,15 @@ class BaseConnection(object):
   MAX_DELETE_KEYS = 500
 
 
+  DEFAULT_MAX_ENTITY_GROUPS_PER_RPC = 10
 
+
+
+
+  def __get_max_entity_groups_per_rpc(self, config):
+    """Internal helper: figures out max_entity_groups_per_rpc for the config."""
+    return Configuration.max_entity_groups_per_rpc(
+        config, self.__config) or self.DEFAULT_MAX_ENTITY_GROUPS_PER_RPC
 
   def __extract_entity_group(self, value):
     """Internal helper: extracts the entity group from a key or entity."""
@@ -1331,6 +1341,20 @@ class BaseConnection(object):
     """
     return self.async_get(None, keys).get_result()
 
+
+
+
+
+  DEFAULT_MAX_ENTITY_GROUPS_PER_HIGH_REP_READ_RPC = 1
+
+  def __get_max_entity_groups_per_high_rep_read_rpc(self, config):
+    """Like __get_max_entity_groups_per_rpc but for HRD reads."""
+
+
+
+    return Configuration.max_entity_groups_per_rpc(
+        config, self.__config) or self.DEFAULT_MAX_ENTITY_GROUPS_PER_HIGH_REP_READ_RPC
+
   def async_get(self, config, keys, extra_hook=None):
     """Asynchronous Get operation.
 
@@ -1380,8 +1404,9 @@ class BaseConnection(object):
 
 
     if is_read_current and not base_req.has_transaction():
-      max_egs_per_rpc = (Configuration.max_entity_groups_per_rpc(
-          config, self.__config))
+
+
+      max_egs_per_rpc = self.__get_max_entity_groups_per_high_rep_read_rpc(config)
     else:
       max_egs_per_rpc = None
 
@@ -1502,8 +1527,7 @@ class BaseConnection(object):
     indexed_entities_by_entity_group = self.__group_indexed_pbs_by_entity_group(
         entities, self.__adapter.entity_to_pb)
     if not base_req.has_transaction():
-      max_egs_per_rpc = (Configuration.max_entity_groups_per_rpc(
-          config, self.__config))
+      max_egs_per_rpc = self.__get_max_entity_groups_per_rpc(config)
     else:
       max_egs_per_rpc = None
 
@@ -1574,8 +1598,7 @@ class BaseConnection(object):
     max_count = (Configuration.max_delete_keys(config, self.__config) or
                  self.MAX_DELETE_KEYS)
     if not base_req.has_transaction():
-      max_egs_per_rpc = (Configuration.max_entity_groups_per_rpc(
-          config, self.__config))
+      max_egs_per_rpc = self.__get_max_entity_groups_per_rpc(config)
     else:
       max_egs_per_rpc = None
     indexed_keys_by_entity_group = self.__group_indexed_pbs_by_entity_group(
@@ -1634,7 +1657,8 @@ class BaseConnection(object):
         (app,))
     req = datastore_pb.BeginTransactionRequest()
     req.set_app(app)
-    if TransactionOptions.allow_multiple_entity_groups(config, self.__config):
+    if (TransactionOptions.xg(config, self.__config) or
+        TransactionOptions.allow_multiple_entity_groups(config, self.__config)):
       req.set_allow_multiple_eg(True)
     resp = datastore_pb.Transaction()
     rpc = self.make_rpc_call(config, 'BeginTransaction', req, resp,
@@ -1762,11 +1786,19 @@ class TransactionOptions(Configuration):
   """An immutable class that contains options for a transaction."""
 
   @ConfigOption
-  def allow_multiple_entity_groups(value):
-    """If the transaction can cover multiple entity groups.
+  def xg(value):
+    """Whether to allow cross-group transactions.
 
     Raises: datastore_errors.BadArgumentError if value is not a bool.
     """
+    if not isinstance(value, bool):
+      raise datastore_errors.BadArgumentError(
+          'xg argument should be bool (%r)' % (value,))
+    return value
+
+  @ConfigOption
+  def allow_multiple_entity_groups(value):
+    """Deprecated, will be removed in 1.5.6. Use xg instead."""
     if not isinstance(value, bool):
       raise datastore_errors.BadArgumentError(
           'allow_multiple_entity_groups argument should be bool (%r)' %

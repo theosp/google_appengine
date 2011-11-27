@@ -36,8 +36,6 @@ import string
 import urllib
 import uuid
 
-from whoosh import analysis
-
 from google.appengine.datastore import document_pb
 from google.appengine.api import apiproxy_stub
 from google.appengine.api.search import query_parser
@@ -54,8 +52,8 @@ __all__ = ['IndexConsistencyError',
            'RamInvertedIndex',
            'SearchServiceStub',
            'SimpleIndex',
+           'SimpleTokenizer',
            'Token',
-           'WhooshTokenizer',
           ]
 
 
@@ -98,9 +96,12 @@ class Token(object):
   @property
   def chars(self):
     """Returns a list of fields of the document."""
+    value = self._chars
+    if not isinstance(value, basestring):
+      value = str(self._chars)
     if self._field_name:
-      return self._field_name + ':' + str(self._chars)
-    return str(self._chars)
+      return self._field_name + ':' + value
+    return value
 
   @property
   def position(self):
@@ -188,23 +189,25 @@ class Posting(object):
     return _Repr(self, [('doc_id', self.doc_id), ('positions', self.positions)])
 
 
-class WhooshTokenizer(object):
-  """A wrapper around whoosh tokenizer pipeline."""
+class SimpleTokenizer(object):
+  """A tokenizer which converts text to lower case and splits on whitespace."""
 
   def __init__(self, split_restricts=True):
-    self._tokenizer = analysis.RegexTokenizer() | analysis.LowercaseFilter()
     self._split_restricts = split_restricts
 
   def TokenizeText(self, text, token_position=0):
     """Tokenizes the text into a sequence of Tokens."""
     return self._TokenizeForType(field_type=document_pb.FieldValue.TEXT,
-                                value=text, token_position=token_position)
+                                 value=text, token_position=token_position)
 
   def TokenizeValue(self, field_value, token_position=0):
     """Tokenizes a document_pb.FieldValue into a sequence of Tokens."""
     return self._TokenizeForType(field_type=field_value.type(),
-                                value=field_value.string_value(),
-                                token_position=token_position)
+                                 value=field_value.string_value(),
+                                 token_position=token_position)
+
+  def _TokenizeString(self, value):
+    return value.lower().split()
 
   def _TokenizeForType(self, field_type, value, token_position=0):
     """Tokenizes value into a sequence of Tokens."""
@@ -216,7 +219,7 @@ class WhooshTokenizer(object):
     if not self._split_restricts:
       token_strings = value.lower().split()
     else:
-      token_strings = [token.text for token in self._tokenizer(unicode(value))]
+      token_strings = self._TokenizeString(value)
     for token in token_strings:
       if ':' in token and self._split_restricts:
         for subtoken in token.split(':'):
@@ -341,8 +344,8 @@ class SimpleIndex(object):
   def __init__(self, index_spec):
     self._index_spec = index_spec
     self._documents = {}
-    self._parser = WhooshTokenizer(split_restricts=False)
-    self._inverted_index = RamInvertedIndex(WhooshTokenizer())
+    self._parser = SimpleTokenizer(split_restricts=False)
+    self._inverted_index = RamInvertedIndex(SimpleTokenizer())
 
   @property
   def IndexSpec(self):
@@ -362,7 +365,7 @@ class SimpleIndex(object):
         self._inverted_index.RemoveDocument(old_document)
       self._documents[doc_id] = document
       new_status = response.add_status()
-      new_status.set_status(search_service_pb.SearchServiceError.OK)
+      new_status.set_code(search_service_pb.SearchServiceError.OK)
       self._inverted_index.AddDocument(doc_id, document)
 
   def DeleteDocuments(self, document_ids, response):
@@ -373,7 +376,7 @@ class SimpleIndex(object):
         self._inverted_index.RemoveDocument(document)
         del self._documents[document_id]
       delete_status = response.add_status()
-      delete_status.set_status(search_service_pb.SearchServiceError.OK)
+      delete_status.set_code(search_service_pb.SearchServiceError.OK)
 
   def Documents(self):
     """Returns the documents in the index."""
@@ -431,9 +434,13 @@ class SimpleIndex(object):
       return [token.RestrictField(field) for token in tokens]
     return tokens
 
+  def _GetQueryNodeText(self, node):
+    """Returns the text from the node, handling that it could be unicode."""
+    return node.getText().encode('utf-8')
+
   def _EvaluatePhrase(self, node, field=None):
     """Evaluates the phrase node returning matching postings."""
-    tokens = self._SplitPhrase(node.getText())
+    tokens = self._SplitPhrase(self._GetQueryNodeText(node))
     tokens = self._AddFieldToTokens(field, tokens)
     position_posting = {}
     token = tokens[0]
@@ -451,7 +458,7 @@ class SimpleIndex(object):
 
   def _PostingsForFieldToken(self, field, value):
     """Returns postings for the value occurring in the given field."""
-    token = field + ':' + str(value)
+    token = field + ':' + value
     token = self._MakeToken(token)
     return self._PostingsForToken(token)
 
@@ -471,18 +478,21 @@ class SimpleIndex(object):
         postings.extend(self._Evaluate(child))
       return postings
     if node.getType() is QueryParser.RESTRICTION:
+
       field_name = node.children[0].getText()
 
       child = node.children[1]
       if child.getType() is QueryParser.PHRASE:
         return self._EvaluatePhrase(node=child, field=field_name)
-      return self._PostingsForFieldToken(field_name, child.getText())
+      return self._PostingsForFieldToken(field_name,
+                                         self._GetQueryNodeText(child))
     if node.getType() is QueryParser.PHRASE:
       return self._EvaluatePhrase(node)
     if (node.getType() is QueryParser.TEXT or
-        node.getType() is QueryParser.SELECTOR or
+        node.getType() is QueryParser.NAME or
+        node.getType() is QueryParser.FLOAT or
         node.getType() is QueryParser.INT):
-      token = node.getText()
+      token = self._GetQueryNodeText(node)
       token = self._MakeToken(token)
       return self._PostingsForToken(token)
 
@@ -494,7 +504,9 @@ class SimpleIndex(object):
     query = query.strip()
     if not query:
       return copy.copy(self._documents.values())
-    query_tree = query_parser.Parse(query)
+    if not isinstance(query, unicode):
+      query = unicode(query, 'utf-8')
+    query_tree = query_parser.Simplify(query_parser.Parse(query))
     postings = self._Evaluate(query_tree)
     return self._DocumentsForPostings(postings)
 
@@ -522,11 +534,11 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
     super(SearchServiceStub, self).__init__(service_name)
 
   def _InvalidRequest(self, status, exception):
-    status.set_status(search_service_pb.SearchServiceError.INVALID_REQUEST)
+    status.set_code(search_service_pb.SearchServiceError.INVALID_REQUEST)
     status.set_error_detail(exception.message)
 
   def _UnknownIndex(self, status, index_spec):
-    status.set_status(search_service_pb.SearchServiceError.INVALID_REQUEST)
+    status.set_code(search_service_pb.SearchServiceError.OK)
     status.set_error_detail('no index for %r' % index_spec)
 
   def _GetIndex(self, index_spec, create=False):
@@ -600,19 +612,37 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
         new_index_spec.set_consistency(random.choice([
             search_service_pb.IndexSpec.GLOBAL,
             search_service_pb.IndexSpec.PER_DOCUMENT]))
-      response.mutable_status().set_status(
+      response.mutable_status().set_code(
           random.choice([search_service_pb.SearchServiceError.OK] * 10 +
                         [search_service_pb.SearchServiceError.TRANSIENT_ERROR] +
                         [search_service_pb.SearchServiceError.INTERNAL_ERROR]))
       return
 
-    for index in self.__indexes.values():
+    response.mutable_status().set_code(
+        search_service_pb.SearchServiceError.OK)
+    if not len(self.__indexes):
+      return
+    keys, indexes = zip(*sorted(self.__indexes.iteritems(), key=lambda v: v[0]))
+    position = 0
+    params = request.params()
+    if params.has_start_index_name():
+      position = bisect.bisect_left(keys, params.start_index_name())
+      if (not params.include_start_index() and position < len(keys)
+          and keys[position] == params.start_index_name()):
+        position += 1
+    elif params.has_index_name_prefix():
+      position = bisect.bisect_left(keys, params.index_name_prefix())
+    if params.has_offset():
+      position += params.offset()
+    end_position = position + params.limit()
+    prefix = params.index_name_prefix()
+    for index in indexes[min(position, len(keys)):min(end_position, len(keys))]:
       index_spec = index.IndexSpec
+      if prefix and not index_spec.name().startswith(prefix):
+        break
       new_index_spec = response.add_index_metadata().mutable_index_spec()
       new_index_spec.set_name(index_spec.name())
       new_index_spec.set_consistency(index_spec.consistency())
-    response.mutable_status().set_status(
-        search_service_pb.SearchServiceError.OK)
 
   def _AddDocument(self, response, document, keys_only):
     doc = response.add_document()
@@ -649,7 +679,7 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
               self._AddDocument(response, document, params.keys_only())
               num_docs += 1
 
-    response.mutable_status().set_status(
+    response.mutable_status().set_code(
         search_service_pb.SearchServiceError.OK)
 
   def _RandomSearchResponse(self, request, response):
@@ -657,7 +687,7 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
     random.seed()
     if random.random() < 0.03:
       raise apiproxy_errors.ResponseTooLargeError()
-    response.mutable_status().set_status(
+    response.mutable_status().set_code(
         random.choice([search_service_pb.SearchServiceError.OK] * 30 +
                       [search_service_pb.SearchServiceError.TRANSIENT_ERROR] +
                       [search_service_pb.SearchServiceError.INTERNAL_ERROR]))
@@ -785,7 +815,7 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
         len(position_range)):
       response.set_cursor(results[position_range[len(position_range) - 1]].id())
 
-    response.status().set_status(search_service_pb.SearchServiceError.OK)
+    response.status().set_code(search_service_pb.SearchServiceError.OK)
 
   def __repr__(self):
     return _Repr(self, [('__indexes', self.__indexes)])

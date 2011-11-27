@@ -66,6 +66,21 @@ Options:
                              lowest port value to use when choosing ports. If
                              set to 0, select random ports.
                              (Default 9000)
+  --mysql_host=HOSTNAME      MySQL database host.
+                             Used by the Cloud SQL (rdbms) stub.
+                             (Default '%(mysql_host)s')
+  --mysql_port=PORT          MySQL port to connect to.
+                             Used by the Cloud SQL (rdbms) stub.
+                             (Default %(mysql_port)s)
+  --mysql_user=USER          MySQL user to connect as.
+                             Used by the Cloud SQL (rdbms) stub.
+                             (Default %(mysql_user)s)
+  --mysql_password=PASSWORD  MySQL password to use.
+                             Used by the Cloud SQL (rdbms) stub.
+                             (Default '%(mysql_password)s')
+  --mysql_socket=PATH        MySQL Unix socket file path.
+                             Used by the Cloud SQL (rdbms) stub.
+                             (Default '%(mysql_socket)s')
   --require_indexes          Disallows queries that require composite indexes
                              not defined in index.yaml.
   --show_mail_body           Log the body of emails in mail stub.
@@ -89,20 +104,6 @@ Options:
   --use_sqlite               Use the new, SQLite based datastore stub.
                              (Default false)
 """
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -195,7 +196,6 @@ ARG_MYSQL_SOCKET = 'mysql_socket'
 ARG_MYSQL_USER = 'mysql_user'
 ARG_PORT = 'port'
 ARG_PROSPECTIVE_SEARCH_PATH = 'prospective_search_path'
-ARG_RDBMS_SQLITE_PATH = 'rdbms_sqlite_path'
 ARG_REQUIRE_INDEXES = 'require_indexes'
 ARG_SHOW_MAIL_BODY = 'show_mail_body'
 ARG_SKIP_SDK_UPDATE_CHECK = 'skip_sdk_update_check'
@@ -205,7 +205,6 @@ ARG_SMTP_PORT = 'smtp_port'
 ARG_SMTP_USER = 'smtp_user'
 ARG_STATIC_CACHING = 'static_caching'
 ARG_TASK_RETRY_SECONDS = 'task_retry_seconds'
-ARG_TEMPLATE_DIR = 'template_dir'
 
 
 ARG_TRUSTED = 'trusted'
@@ -252,8 +251,6 @@ DEFAULT_ARGS = {
   ARG_PORT: 8080,
   ARG_PROSPECTIVE_SEARCH_PATH: os.path.join(tempfile.gettempdir(),
                                             'dev_appserver.prospective_search'),
-  ARG_RDBMS_SQLITE_PATH: os.path.join(tempfile.gettempdir(),
-                                      'dev_appserver.rdbms'),
   ARG_REQUIRE_INDEXES: False,
   ARG_SHOW_MAIL_BODY: False,
   ARG_SKIP_SDK_UPDATE_CHECK: False,
@@ -263,7 +260,6 @@ DEFAULT_ARGS = {
   ARG_SMTP_USER: '',
   ARG_STATIC_CACHING: True,
   ARG_TASK_RETRY_SECONDS: 30,
-  ARG_TEMPLATE_DIR: os.path.join(SDK_PATH, 'templates'),
   ARG_TRUSTED: False,
   ARG_USE_SQLITE: False,
 }
@@ -334,7 +330,6 @@ def ParseArguments(argv):
         'mysql_socket=',
         'mysql_user=',
         'port=',
-        'rdbms_sqlite_path=',
         'require_indexes',
         'show_mail_body',
         'skip_sdk_update_check',
@@ -343,7 +338,6 @@ def ParseArguments(argv):
         'smtp_port=',
         'smtp_user=',
         'task_retry_seconds=',
-        'template_dir=',
         'trusted',
         'use_sqlite',
       ])
@@ -403,9 +397,6 @@ def ParseArguments(argv):
     if option == '--require_indexes':
       option_dict[ARG_REQUIRE_INDEXES] = True
 
-    if option == '--rdbms_sqlite_path':
-      option_dict[ARG_RDBMS_SQLITE_PATH] = value
-
     if option == '--mysql_host':
       option_dict[ARG_MYSQL_HOST] = value
 
@@ -444,9 +435,6 @@ def ParseArguments(argv):
 
     if option == '--debug_imports':
       option_dict['_ENABLE_LOGGING'] = True
-
-    if option == '--template_dir':
-      option_dict[ARG_TEMPLATE_DIR] = value
 
     if option == '--admin_console_server':
       option_dict[ARG_ADMIN_CONSOLE_SERVER] = value.strip()
@@ -576,9 +564,11 @@ def main(argv):
 
   logging.getLogger().setLevel(log_level)
 
+  default_partition = option_dict[ARG_DEFAULT_PARTITION]
   appinfo = None
   try:
-    appinfo, matcher = dev_appserver.LoadAppConfig(root_path, {})
+    appinfo, matcher, _ = dev_appserver.LoadAppConfig(
+        root_path, {}, default_partition=default_partition)
   except yaml_errors.EventListenerError, e:
     logging.error('Fatal error when loading application configuration:\n%s', e)
     return 1
@@ -614,13 +604,11 @@ def main(argv):
   dev_process = multiprocess.GlobalProcess()
   port = option_dict[ARG_PORT]
   login_url = option_dict[ARG_LOGIN_URL]
-  template_dir = option_dict[ARG_TEMPLATE_DIR]
   address = option_dict[ARG_ADDRESS]
   require_indexes = option_dict[ARG_REQUIRE_INDEXES]
   allow_skipped_files = option_dict[ARG_ALLOW_SKIPPED_FILES]
   static_caching = option_dict[ARG_STATIC_CACHING]
   skip_sdk_update_check = option_dict[ARG_SKIP_SDK_UPDATE_CHECK]
-  default_partition = option_dict[ARG_DEFAULT_PARTITION]
 
   if (option_dict[ARG_ADMIN_CONSOLE_SERVER] != '' and
       not dev_process.IsSubprocess()):
@@ -650,7 +638,6 @@ def main(argv):
       root_path,
       login_url,
       port,
-      template_dir,
       sdk_dir=SDK_PATH,
       serve_address=address,
       require_indexes=require_indexes,

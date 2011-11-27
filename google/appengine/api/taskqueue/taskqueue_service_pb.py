@@ -24,6 +24,13 @@ import dummy_thread as thread
 __pychecker__ = """maxreturns=0 maxbranches=0 no-callinit
                    unusednames=printElemNumber,debug_strs no-special"""
 
+if hasattr(ProtocolBuffer, 'ExtendableProtocolMessage'):
+  _extension_runtime = True
+  _ExtendableProtocolMessage = ProtocolBuffer.ExtendableProtocolMessage
+else:
+  _extension_runtime = False
+  _ExtendableProtocolMessage = ProtocolBuffer.ProtocolMessage
+
 from google.appengine.datastore.datastore_v3_pb import *
 import google.appengine.datastore.datastore_v3_pb
 from google.net.proto.message_set import MessageSet
@@ -3930,10 +3937,6 @@ class TaskQueueFetchQueueStatsRequest(ProtocolBuffer.ProtocolMessage):
 
   def IsInitialized(self, debug_strs=None):
     initialized = 1
-    if (not self.has_max_num_tasks_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: max_num_tasks not set.')
     return initialized
 
   def ByteSize(self):
@@ -3941,17 +3944,15 @@ class TaskQueueFetchQueueStatsRequest(ProtocolBuffer.ProtocolMessage):
     if (self.has_app_id_): n += 1 + self.lengthString(len(self.app_id_))
     n += 1 * len(self.queue_name_)
     for i in xrange(len(self.queue_name_)): n += self.lengthString(len(self.queue_name_[i]))
-    n += self.lengthVarInt64(self.max_num_tasks_)
-    return n + 1
+    if (self.has_max_num_tasks_): n += 1 + self.lengthVarInt64(self.max_num_tasks_)
+    return n
 
   def ByteSizePartial(self):
     n = 0
     if (self.has_app_id_): n += 1 + self.lengthString(len(self.app_id_))
     n += 1 * len(self.queue_name_)
     for i in xrange(len(self.queue_name_)): n += self.lengthString(len(self.queue_name_[i]))
-    if (self.has_max_num_tasks_):
-      n += 1
-      n += self.lengthVarInt64(self.max_num_tasks_)
+    if (self.has_max_num_tasks_): n += 1 + self.lengthVarInt64(self.max_num_tasks_)
     return n
 
   def Clear(self):
@@ -3966,8 +3967,9 @@ class TaskQueueFetchQueueStatsRequest(ProtocolBuffer.ProtocolMessage):
     for i in xrange(len(self.queue_name_)):
       out.putVarInt32(18)
       out.putPrefixedString(self.queue_name_[i])
-    out.putVarInt32(24)
-    out.putVarInt32(self.max_num_tasks_)
+    if (self.has_max_num_tasks_):
+      out.putVarInt32(24)
+      out.putVarInt32(self.max_num_tasks_)
 
   def OutputPartial(self, out):
     if (self.has_app_id_):
@@ -8131,5 +8133,7 @@ class TaskQueueModifyTaskLeaseResponse(ProtocolBuffer.ProtocolMessage):
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
   _PROTO_DESCRIPTOR_NAME = 'apphosting.TaskQueueModifyTaskLeaseResponse'
+if _extension_runtime:
+  pass
 
 __all__ = ['TaskQueueServiceError','TaskQueueRetryParameters','TaskQueueAcl','TaskQueueHttpHeader','TaskQueueMode','TaskQueueAddRequest','TaskQueueAddRequest_Header','TaskQueueAddRequest_CronTimetable','TaskQueueAddResponse','TaskQueueBulkAddRequest','TaskQueueBulkAddResponse','TaskQueueBulkAddResponse_TaskResult','TaskQueueDeleteRequest','TaskQueueDeleteResponse','TaskQueueForceRunRequest','TaskQueueForceRunResponse','TaskQueueUpdateQueueRequest','TaskQueueUpdateQueueResponse','TaskQueueFetchQueuesRequest','TaskQueueFetchQueuesResponse','TaskQueueFetchQueuesResponse_Queue','TaskQueueFetchQueueStatsRequest','TaskQueueScannerQueueInfo','TaskQueueFetchQueueStatsResponse','TaskQueueFetchQueueStatsResponse_QueueStats','TaskQueuePauseQueueRequest','TaskQueuePauseQueueResponse','TaskQueuePurgeQueueRequest','TaskQueuePurgeQueueResponse','TaskQueueDeleteQueueRequest','TaskQueueDeleteQueueResponse','TaskQueueDeleteGroupRequest','TaskQueueDeleteGroupResponse','TaskQueueQueryTasksRequest','TaskQueueQueryTasksResponse','TaskQueueQueryTasksResponse_TaskHeader','TaskQueueQueryTasksResponse_TaskCronTimetable','TaskQueueQueryTasksResponse_TaskRunLog','TaskQueueQueryTasksResponse_Task','TaskQueueFetchTaskRequest','TaskQueueFetchTaskResponse','TaskQueueUpdateStorageLimitRequest','TaskQueueUpdateStorageLimitResponse','TaskQueueQueryAndOwnTasksRequest','TaskQueueQueryAndOwnTasksResponse','TaskQueueQueryAndOwnTasksResponse_Task','TaskQueueModifyTaskLeaseRequest','TaskQueueModifyTaskLeaseResponse']
