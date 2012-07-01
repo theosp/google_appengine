@@ -41,6 +41,7 @@ import logging
 import os
 import socket
 import StringIO
+import sys
 import urllib
 import urlparse
 
@@ -75,6 +76,9 @@ _API_CALL_DEADLINE = 5.0
 
 
 _API_CALL_VALIDATE_CERTIFICATE_DEFAULT = True
+
+
+_CONNECTION_SUPPORTS_TIMEOUT = sys.version_info >= (2, 6)
 
 
 
@@ -193,10 +197,8 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
       raise apiproxy_errors.ApplicationError(
           urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR)
 
-    sanitized_headers = self._SanitizeHttpHeaders(_UNTRUSTED_REQUEST_HEADERS,
-                                                  request.header_list())
-    request.clear_header()
-    request.header_list().extend(sanitized_headers)
+    self._SanitizeHttpHeaders(_UNTRUSTED_REQUEST_HEADERS,
+                              request.header_list())
     deadline = _API_CALL_DEADLINE
     if request.has_deadline():
       deadline = request.deadline()
@@ -312,27 +314,36 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
         escaped_payload = payload.encode('string_escape')
       else:
         escaped_payload = ''
-      logging.debug('Making HTTP request: host = %s, '
-                    'url = %s, payload = %s, headers = %s',
+      logging.debug('Making HTTP request: host = %r, '
+                    'url = %r, payload = %.1000r, headers = %r',
                     host, url, escaped_payload, adjusted_headers)
       try:
         if protocol == 'http':
-          connection = httplib.HTTPConnection(host)
+          connection_class = httplib.HTTPConnection
         elif protocol == 'https':
           if (validate_certificate and _CanValidateCerts() and
               CERT_PATH):
 
             connection_class = fancy_urllib.create_fancy_connection(
                 ca_certs=CERT_PATH)
-            connection = connection_class(host)
           else:
-            connection = httplib.HTTPSConnection(host)
+            connection_class = httplib.HTTPSConnection
         else:
 
           error_msg = 'Redirect specified invalid protocol: "%s"' % protocol
           logging.error(error_msg)
           raise apiproxy_errors.ApplicationError(
               urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR, error_msg)
+
+
+
+
+
+
+        if _CONNECTION_SUPPORTS_TIMEOUT:
+          connection = connection_class(host, timeout=deadline)
+        else:
+          connection = connection_class(host)
 
 
 
@@ -344,9 +355,13 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
         else:
           full_path = path
 
-        orig_timeout = socket.getdefaulttimeout()
+        if not _CONNECTION_SUPPORTS_TIMEOUT:
+          orig_timeout = socket.getdefaulttimeout()
         try:
-          socket.setdefaulttimeout(deadline)
+          if not _CONNECTION_SUPPORTS_TIMEOUT:
+
+
+            socket.setdefaulttimeout(deadline)
           connection.request(method, full_path, payload, adjusted_headers)
           http_response = connection.getresponse()
           if method == 'HEAD':
@@ -354,7 +369,8 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
           else:
             http_response_data = http_response.read()
         finally:
-          socket.setdefaulttimeout(orig_timeout)
+          if not _CONNECTION_SUPPORTS_TIMEOUT:
+            socket.setdefaulttimeout(orig_timeout)
           connection.close()
       except (_fancy_urllib_InvalidCertException,
               _fancy_urllib_SSLError), e:
@@ -415,15 +431,18 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
           urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR, error_msg)
 
   def _SanitizeHttpHeaders(self, untrusted_headers, headers):
-    """Cleans "unsafe" headers from the HTTP request/response.
+    """Cleans "unsafe" headers from the HTTP request, in place.
 
     Args:
-      untrusted_headers: set of untrusted headers names
-      headers: list of string pairs, first is header name and the second is header's value
+      untrusted_headers: Set of untrusted headers names (all lowercase).
+      headers: List of Header objects. The list is modified in place.
     """
     prohibited_headers = [h.key() for h in headers
                           if h.key().lower() in untrusted_headers]
     if prohibited_headers:
       logging.warn('Stripped prohibited headers from URLFetch request: %s',
                    prohibited_headers)
-    return (h for h in headers if h.key().lower() not in untrusted_headers)
+
+      for index in reversed(xrange(len(headers))):
+        if headers[index].key().lower() in untrusted_headers:
+          del headers[index]

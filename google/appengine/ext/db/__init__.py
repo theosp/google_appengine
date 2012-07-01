@@ -249,6 +249,7 @@ _ALLOWED_PROPERTY_TYPES = set([
     datetime.date,
     datetime.time,
     Blob,
+    datastore_types.EmbeddedEntity,
     ByteString,
     Text,
     users.User,
@@ -361,7 +362,7 @@ def model_from_protobuf(pb, _entity_class=datastore.Entity):
     Model instance resulting from decoding the protocol buffer
   """
 
-  entity = _entity_class.FromPb(pb)
+  entity = _entity_class.FromPb(pb, default_kind=Expando.kind())
   return class_for_kind(entity.kind()).from_entity(entity)
 
 
@@ -3605,6 +3606,10 @@ class ReferenceProperty(Property):
 
     self.reference_class = self.data_type = reference_class
 
+  def make_value_from_datastore_index_value(self, index_value):
+    value = datastore_types.RestoreFromIndexValue(index_value, Key)
+    return self.make_value_from_datastore(value)
+
   def __property_config__(self, model_class, property_name):
     """Loads all of the references that point to this model.
 
@@ -3739,7 +3744,7 @@ class ReferenceProperty(Property):
 
     if value is not None and not isinstance(value, self.reference_class):
       raise KindError('Property %s must be an instance of %s' %
-                            (self.name, self.reference_class.kind()))
+                      (self.name, self.reference_class.kind()))
 
     return value
 

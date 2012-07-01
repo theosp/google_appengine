@@ -68,7 +68,14 @@ LOG_LEVEL_WARNING = 2
 LOG_LEVEL_ERROR = 3
 LOG_LEVEL_CRITICAL = 4
 
-_MAJOR_VERSION_ID_PATTERN = r'^[a-z\d][a-z\d\-]{0,99}$'
+
+SERVER_ID_RE_STRING = r'(?!-)[a-z\d\-]{1,63}'
+
+
+SERVER_VERSION_RE_STRING = r'(?!-)[a-z\d\-]{1,100}'
+_MAJOR_VERSION_ID_PATTERN = r'^(?:(?:(%s):)?)(%s)$' % (SERVER_ID_RE_STRING,
+                                                       SERVER_VERSION_RE_STRING)
+
 _MAJOR_VERSION_ID_RE = re.compile(_MAJOR_VERSION_ID_PATTERN)
 
 
@@ -83,9 +90,10 @@ class InvalidArgumentError(Error):
 class TimeoutError(Error):
   """Requested timeout for fetch() call has expired while iterating results."""
 
-  def __init__(self, msg, offset):
+  def __init__(self, msg, offset, last_end_time):
     Error.__init__(self, msg)
     self.__offset = offset
+    self.__last_end_time = last_end_time
 
   @property
   def offset(self):
@@ -98,6 +106,16 @@ class TimeoutError(Error):
         A byte string representing an offset into the log stream, or None.
     """
     return self.__offset
+
+  @property
+  def last_end_time(self):
+    """End time of the last request examined prior to the timeout, or None.
+
+    Returns:
+        A float representing the completion time in seconds since the Unix
+        epoch of the last request examined.
+    """
+    return self.__last_end_time
 
 
 class LogsBuffer(object):
@@ -389,6 +407,7 @@ class _LogQueryResult(object):
     self._request = request
     self._logs = []
     self._read_called = False
+    self._last_end_time = None
     self._end_time = None
     if timeout is not None:
       self._end_time = time.time() + timeout
@@ -410,7 +429,7 @@ class _LogQueryResult(object):
           if self._request.has_offset():
             offset = self._request.offset().Encode()
           raise TimeoutError('A timeout occurred while iterating results',
-                             offset=offset)
+                             offset=offset, last_end_time=self._last_end_time)
         self._read_called = True
         self._advance()
       else:
@@ -436,6 +455,9 @@ class _LogQueryResult(object):
     self._request.clear_offset()
     if response.has_offset():
       self._request.mutable_offset().CopyFrom(response.offset())
+    self._last_end_time = None
+    if response.has_last_end_time():
+      self._last_end_time = response.last_end_time() / 1e6
 
 
 class RequestLog(object):

@@ -705,7 +705,8 @@ class UpdateCheck(object):
     print 'Your SDK:'
     print yaml.dump(version)
     print '-----------'
-    print 'Please visit http://code.google.com/appengine for the latest SDK'
+    print 'Please visit https://developers.google.com/appengine/downloads'
+    print 'for the latest SDK'
     print '****************************************************************'
 
   def AllowedToCheckForUpdates(self, input_fn=raw_input):
@@ -858,7 +859,7 @@ class PagespeedEntryUpload(object):
       rpcserver: The RPC server to use. Should be an instance of a subclass of
         AbstractRpcServer.
       config: The AppInfoExternal object derived from the app.yaml file.
-      pagespeed: The PagespeedInfoExternal object from pagespeed.yaml.
+      pagespeed: The PagespeedEntry object from config.
     """
     self.rpcserver = rpcserver
     self.config = config
@@ -866,11 +867,28 @@ class PagespeedEntryUpload(object):
 
   def DoUpload(self):
     """Uploads the pagespeed entries."""
-    StatusUpdate('Uploading Page Speed configuration.')
-    self.rpcserver.Send('/api/pagespeed/update',
-                        app_id=self.config.application,
-                        version=self.config.version,
-                        payload=self.pagespeed.ToYAML())
+
+    pagespeed_yaml = ''
+    if self.pagespeed:
+      StatusUpdate('Uploading PageSpeed configuration.')
+      pagespeed_yaml = self.pagespeed.ToYAML()
+    try:
+      self.rpcserver.Send('/api/appversion/updatepagespeed',
+                          app_id=self.config.application,
+                          version=self.config.version,
+                          payload=pagespeed_yaml)
+    except urllib2.HTTPError, err:
+
+
+
+
+
+
+
+
+
+      if err.code != 404 or self.pagespeed is not None:
+        raise
 
 
 class DefaultVersionSet(object):
@@ -1744,6 +1762,7 @@ class AppVersionUpload(object):
     self.rpcserver = rpcserver
     self.config = config
     self.app_id = self.config.application
+    self.server = self.config.server
     self.backend = backend
     self.error_fh = error_fh or sys.stderr
 
@@ -1752,6 +1771,8 @@ class AppVersionUpload(object):
     self.params = {}
     if self.app_id:
       self.params['app_id'] = self.app_id
+    if self.server:
+      self.params['server'] = self.server
     if self.backend:
       self.params['backend'] = self.backend
     elif self.version:
@@ -1979,37 +2000,29 @@ class AppVersionUpload(object):
       StatusUpdate('Will check again in %s seconds.' % delay)
 
     app_summary = None
-    try:
-      app_summary = self.Deploy()
+
+    app_summary = self.Deploy()
 
 
+    success, unused_contents = RetryWithBackoff(
+        lambda: (self.IsReady(), None), PrintRetryMessage, 1, 2, 60, 20)
+    if not success:
+
+      logging.warning('Version still not ready to serve, aborting.')
+      raise Exception('Version not ready.')
+
+    result = self.StartServing()
+    if not result:
+
+
+      self.in_transaction = False
+    else:
       success, unused_contents = RetryWithBackoff(
-          lambda: (self.IsReady(), None), PrintRetryMessage, 1, 2, 60, 20)
+          lambda: (self.IsServing(), None), PrintRetryMessage, 1, 2, 60, 20)
       if not success:
 
-        logging.warning('Version still not ready to serve, aborting.')
+        logging.warning('Version still not serving, aborting.')
         raise Exception('Version not ready.')
-
-      result = self.StartServing()
-      if not result:
-
-
-        self.in_transaction = False
-      else:
-        success, unused_contents = RetryWithBackoff(
-            lambda: (self.IsServing(), None), PrintRetryMessage, 1, 1, 1, 60)
-        if not success:
-
-          logging.warning('Version still not serving, aborting.')
-          raise Exception('Version not ready.')
-        self.in_transaction = False
-    except urllib2.HTTPError, e:
-
-      if e.code != 404:
-
-        raise
-      StatusUpdate('Closing update.')
-      self.Send('/api/appversion/commit')
       self.in_transaction = False
 
     return app_summary
@@ -2097,16 +2110,12 @@ class AppVersionUpload(object):
     self.in_transaction = False
     self.files = {}
 
-  def DoUpload(self, paths, openfunc, max_size_override=None):
+  def DoUpload(self, paths, openfunc):
     """Uploads a new appversion with the given config and files to the server.
 
     Args:
       paths: An iterator that yields the relative paths of the files to upload.
       openfunc: A function that takes a path and returns a file-like object.
-      max_size_override: The maximum size file to upload (or None to use server
-        returned resource limits). For historic reasons, this size applies
-        to both files and blobs (while server resource limits can be
-        varied independently).
 
     Returns:
       An appinfo.AppInfoSummary if one was returned from the server, None
@@ -2128,11 +2137,7 @@ class AppVersionUpload(object):
         file_classification = FileClassification(self.config, path)
         try:
           file_length = GetFileLength(file_handle)
-
-
-          if max_size_override:
-            max_size = max_size_override
-          elif file_classification.IsApplicationFile():
+          if file_classification.IsApplicationFile():
             max_size = resource_limits['max_file_size']
           else:
             max_size = resource_limits['max_blob_size']
@@ -2430,10 +2435,6 @@ class AppCfgApp(object):
 
 
     self.options, self.args = self.parser.parse_args(argv[1:])
-    if self.options.max_size is not None:
-      print >>sys.stderr, """\
-WARNING: -S/--max_size is deprecated. The server provides the current value;
-you do not need to override the size except in rare cases."""
 
     if len(self.args) < 1:
       self._PrintHelpAndExit()
@@ -2763,7 +2764,8 @@ you do not need to override the size except in rare cases."""
 
     Args:
       basepath: Base application directory.
-      file_name: Filename without extension to search for.
+      file_name: Relative file path from basepath, without extension, to search
+        for.
 
     Returns:
       Path to located yaml file if one exists, else None.
@@ -2783,25 +2785,21 @@ you do not need to override the size except in rare cases."""
 
     return None
 
-  def _ParseAppYaml(self, basepath):
+  def _ParseAppInfoFromYaml(self, basepath, basename='app'):
     """Parses the app.yaml file.
 
     Args:
-      basepath: the directory of the application.
+      basepath: The directory of the application.
+      basename: The relative file path, from basepath, to search for.
 
     Returns:
       An AppInfoExternal object.
     """
-    appyaml_filename = self._FindYaml(basepath, 'app')
-    if appyaml_filename is None:
-      self.parser.error('Directory does not contain an app.yaml '
-                        'configuration file.')
+    appyaml = self._ParseYamlFile(basepath, basename, appinfo_includes.Parse)
+    if appyaml is None:
+      self.parser.error('Directory does not contain an %s.yaml '
+                        'configuration file.' % basename)
 
-    fh = self.opener(appyaml_filename, 'r')
-    try:
-      appyaml = appinfo_includes.Parse(fh, self.opener)
-    finally:
-      fh.close()
     orig_application = appyaml.application
     orig_version = appyaml.version
     if self.options.app_id:
@@ -2822,11 +2820,12 @@ you do not need to override the size except in rare cases."""
     return appyaml
 
   def _ParseYamlFile(self, basepath, basename, parser):
-    """Parses the a yaml file.
+    """Parses a yaml file.
 
     Args:
-      basepath: the directory of the application.
-      basename: the base name of the file (with the '.yaml' stripped off).
+      basepath: The base directory of the application.
+      basename: The relative file path, from basepath, (with the '.yaml'
+        stripped off).
       parser: the function or method used to parse the file.
 
     Returns:
@@ -2836,7 +2835,7 @@ you do not need to override the size except in rare cases."""
     if file_name is not None:
       fh = self.opener(file_name, 'r')
       try:
-        defns = parser(fh)
+        defns = parser(fh, open_fn=self.opener)
       finally:
         fh.close()
       return defns
@@ -2899,18 +2898,6 @@ you do not need to override the size except in rare cases."""
     """
     return self._ParseYamlFile(basepath, 'dos', dosinfo.LoadSingleDos)
 
-  def _ParsePagespeedYaml(self, basepath):
-    """Parses the pagespeed.yaml file.
-
-    Args:
-      basepath: the directory of the application.
-
-    Returns:
-      A PagespeedInfoExternal object or None if the file does not exist.
-    """
-    return self._ParseYamlFile(basepath, 'pagespeed',
-                               pagespeedinfo.LoadSinglePagespeed)
-
   def Help(self, action=None):
     """Prints help for a specific action.
 
@@ -2967,7 +2954,7 @@ you do not need to override the size except in rare cases."""
     Args:
       rpcserver: An AbstractRpcServer instance on which RPC calls can be made.
       basepath: The root directory of the version to update.
-      appyaml: The AppInfoExternal object parsed from app.yaml
+      appyaml: The AppInfoExternal object parsed from an app.yaml-like file.
       backend: The name of the backend to update, if any.
 
     Returns:
@@ -2975,35 +2962,51 @@ you do not need to override the size except in rare cases."""
       otherwise.
     """
 
-
     if self.options.precompilation:
       if not appyaml.derived_file_type:
         appyaml.derived_file_type = []
       if appinfo.PYTHON_PRECOMPILED not in appyaml.derived_file_type:
         appyaml.derived_file_type.append(appinfo.PYTHON_PRECOMPILED)
 
-    if self.options.skip_sdk_update_check:
-      logging.info('Skipping update check')
-    else:
-      updatecheck = self.update_check_class(rpcserver, appyaml)
-      updatecheck.CheckForUpdates()
-
     appversion = AppVersionUpload(rpcserver, appyaml, backend, self.error_fh)
     return appversion.DoUpload(
         self.file_iterator(basepath, appyaml.skip_files, appyaml.runtime),
-        lambda path: self.opener(os.path.join(basepath, path), 'rb'),
-        self.options.max_size)
+        lambda path: self.opener(os.path.join(basepath, path), 'rb'))
 
   def Update(self):
     """Updates and deploys a new appversion and global app configs."""
-    if self.args:
-      self.parser.error('Expected a single <directory> argument.')
-
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = None
     rpcserver = self._GetRpcServer()
+    if os.path.isdir(self.basepath):
+      appyaml = self._ParseAppInfoFromYaml(self.basepath)
 
 
-    self.UpdateVersion(rpcserver, self.basepath, appyaml)
+
+
+      if self.options.skip_sdk_update_check:
+        logging.info('Skipping update check')
+      else:
+        updatecheck = self.update_check_class(rpcserver, appyaml)
+        updatecheck.CheckForUpdates()
+      self.UpdateVersion(rpcserver, self.basepath, appyaml)
+    else:
+      all_files = [self.basepath] + self.args
+
+      for yaml_path in all_files:
+        file_name = os.path.basename(yaml_path)
+        self.basepath = os.path.dirname(yaml_path)
+        if not self.basepath:
+          self.basepath = '.'
+        server_yaml = self._ParseAppInfoFromYaml(self.basepath,
+                                                 os.path.splitext(file_name)[0])
+
+
+
+        if not server_yaml.server and file_name != 'app.yaml':
+          ErrorUpdate("Error: 'server' parameter not specified in %s" %
+                      yaml_path)
+          continue
+        self.UpdateVersion(rpcserver, self.basepath, server_yaml)
 
 
     if self.options.backends:
@@ -3046,11 +3049,18 @@ you do not need to override the size except in rare cases."""
       dos_upload.DoUpload()
 
 
-    pagespeed_yaml = self._ParsePagespeedYaml(self.basepath)
-    if pagespeed_yaml:
+    if appyaml:
       pagespeed_upload = PagespeedEntryUpload(
-          rpcserver, appyaml, pagespeed_yaml)
-      pagespeed_upload.DoUpload()
+          rpcserver, appyaml, appyaml.pagespeed)
+      try:
+        pagespeed_upload.DoUpload()
+      except urllib2.HTTPError, e:
+        ErrorUpdate('Error %d: --- begin server output ---\n'
+                    '%s\n--- end server output ---' %
+                    (e.code, e.read().rstrip('\n')))
+        print >> self.error_fh, (
+            'Your app was updated, but there was an error updating PageSpeed. '
+            'Please try the update again later.')
 
   def _UpdateOptions(self, parser):
     """Adds update-specific options to 'parser'.
@@ -3058,11 +3068,6 @@ you do not need to override the size except in rare cases."""
     Args:
       parser: An instance of OptionsParser.
     """
-    parser.add_option('-S', '--max_size', type='int', dest='max_size',
-                      default=None, metavar='SIZE',
-                      help='DEPRECATED: Maximum size of a file to upload. '
-                      'The server provides the current value; you do not need '
-                      'to override the size except in rare cases.')
     parser.add_option('--no_precompilation', action='store_false',
                       dest='precompilation', default=True,
                       help='Disable automatic Python precompilation.')
@@ -3075,7 +3080,7 @@ you do not need to override the size except in rare cases."""
     if self.args:
       self.parser.error('Expected a single <directory> argument.')
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
 
 
     index_defs = self._ParseIndexYaml(self.basepath)
@@ -3103,7 +3108,7 @@ you do not need to override the size except in rare cases."""
     if self.args:
       self.parser.error('Expected a single <directory> argument.')
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
 
 
@@ -3118,7 +3123,7 @@ you do not need to override the size except in rare cases."""
       self.parser.error('Expected a single <directory> argument.')
 
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
 
 
@@ -3132,7 +3137,7 @@ you do not need to override the size except in rare cases."""
     if self.args:
       self.parser.error('Expected a single <directory> argument.')
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
 
 
@@ -3146,7 +3151,7 @@ you do not need to override the size except in rare cases."""
     if self.args:
       self.parser.error('Expected a single <directory> argument.')
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
 
 
@@ -3154,21 +3159,6 @@ you do not need to override the size except in rare cases."""
     if dos_yaml:
       dos_upload = DosEntryUpload(rpcserver, appyaml, dos_yaml)
       dos_upload.DoUpload()
-
-  def UpdatePagespeed(self):
-    """Updates any new or changed pagespeed configuration."""
-    if self.args:
-      self.parser.error('Expected a single <directory> argument.')
-
-    appyaml = self._ParseAppYaml(self.basepath)
-    rpcserver = self._GetRpcServer()
-
-
-    pagespeed_yaml = self._ParsePagespeedYaml(self.basepath)
-    if pagespeed_yaml:
-      pagespeed_upload = PagespeedEntryUpload(
-          rpcserver, appyaml, pagespeed_yaml)
-      pagespeed_upload.DoUpload()
 
   def BackendsAction(self):
     """Placeholder; we never expect this action to be invoked."""
@@ -3218,7 +3208,7 @@ you do not need to override the size except in rare cases."""
     elif len(self.args) > 1:
       self.parser.error('Expected an optional <backend> argument.')
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
 
     backends_to_update = self.BackendsYamlCheck(appyaml, self.backend)
@@ -3233,7 +3223,7 @@ you do not need to override the size except in rare cases."""
 
 
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
     response = rpcserver.Send('/api/backends/list', app_id=appyaml.application)
     print >> self.out_fh, response
@@ -3251,7 +3241,7 @@ you do not need to override the size except in rare cases."""
       self.parser.error('Expected a single <backend> argument.')
 
     backend = self.args[0]
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
     response = rpcserver.Send('/api/backends/start',
                               app_id=appyaml.application,
@@ -3264,7 +3254,7 @@ you do not need to override the size except in rare cases."""
       self.parser.error('Expected a single <backend> argument.')
 
     backend = self.args[0]
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
     response = rpcserver.Send('/api/backends/stop',
                               app_id=appyaml.application,
@@ -3277,7 +3267,7 @@ you do not need to override the size except in rare cases."""
       self.parser.error('Expected a single <backend> argument.')
 
     backend = self.args[0]
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     rpcserver = self._GetRpcServer()
     response = rpcserver.Send('/api/backends/delete',
                               app_id=appyaml.application,
@@ -3290,7 +3280,7 @@ you do not need to override the size except in rare cases."""
       self.parser.error('Expected a single <backend> argument.')
 
     backend = self.args[0]
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     backends_yaml = self._ParseBackendsYaml(self.basepath)
     rpcserver = self._GetRpcServer()
     response = rpcserver.Send('/api/backends/configure',
@@ -3298,6 +3288,36 @@ you do not need to override the size except in rare cases."""
                               backend=backend,
                               payload=backends_yaml.ToYAML())
     print >> self.out_fh, response
+
+  def Start(self):
+    """Starts a server."""
+    if len(self.args) < 1:
+      self.parser.error('Expected at least one <file> argument.')
+
+    servers_to_process = []
+    for yaml_path in self.args:
+      file_name = os.path.basename(yaml_path)
+      base_path = os.path.dirname(yaml_path)
+      if not base_path:
+        base_path = '.'
+      server_yaml = self._ParseAppInfoFromYaml(base_path,
+                                               os.path.splitext(file_name)[0])
+
+      if not server_yaml.server and file_name != 'app.yaml':
+        ErrorUpdate("Error: 'server' parameter not specified in %s" % yaml_path)
+        return
+
+      servers_to_process.append(server_yaml)
+
+    rpcserver = self._GetRpcServer()
+    for server_yaml in servers_to_process:
+
+
+
+      response = rpcserver.Send('/api/servers/start',
+                                app_id=server_yaml.application,
+                                server=server_yaml.server)
+      print >> self.out_fh, response
 
   def Rollback(self):
     """Does a rollback of an existing transaction for this app version."""
@@ -3314,7 +3334,7 @@ you do not need to override the size except in rare cases."""
     If a backend is specified the rollback will affect only that backend, if no
     backend is specified the rollback will affect the current app version.
     """
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     appversion = AppVersionUpload(self._GetRpcServer(), appyaml, backend)
 
 
@@ -3326,7 +3346,7 @@ you do not need to override the size except in rare cases."""
     if self.args:
       self.parser.error('Expected a single <directory> argument.')
 
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
 
     version_setter = DefaultVersionSet(self._GetRpcServer(), appyaml)
     version_setter.SetVersion()
@@ -3350,7 +3370,7 @@ you do not need to override the size except in rare cases."""
       self.parser.error('End date must be in the format YYYY-MM-DD.')
 
     rpcserver = self._GetRpcServer()
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     logs_requester = LogsRequester(rpcserver, appyaml, self.args[0],
                                    self.options.num_days,
                                    self.options.append,
@@ -3521,7 +3541,7 @@ you do not need to override the size except in rare cases."""
 
     if len(self.args) == 1:
       self.basepath = self.args[0]
-      appyaml = self._ParseAppYaml(self.basepath)
+      appyaml = self._ParseAppInfoFromYaml(self.basepath)
 
       self.options.app_id = appyaml.application
 
@@ -3751,7 +3771,7 @@ you do not need to override the size except in rare cases."""
     Args:
       output: The file handle to write the output to (used for testing).
     """
-    appyaml = self._ParseAppYaml(self.basepath)
+    appyaml = self._ParseAppInfoFromYaml(self.basepath)
     resource_limits = GetResourceLimits(self._GetRpcServer(), appyaml)
 
 
@@ -3819,7 +3839,7 @@ you do not need to override the size except in rare cases."""
 
       'update': Action(
           function='Update',
-          usage='%prog [options] update <directory> [version]',
+          usage='%prog [options] update <directory>',
           options=_UpdateOptions,
           short_desc='Create or update an app version.',
           long_desc="""
@@ -3871,15 +3891,6 @@ definitions from the optional queue.yaml file."""),
           long_desc="""
 The 'update_dos' command will update any new, removed or changed dos
 definitions from the optional dos.yaml file."""),
-
-      'update_pagespeed': Action(
-          function='UpdatePagespeed',
-          usage='%prog [options] update_pagespeed <directory>',
-          short_desc='Update application pagespeed definitions.',
-          long_desc="""
-The 'update_pagespeed' command will update your Page Speed configuration
-from the optional pagesped.yaml file.""",
-          hidden=True),
 
       'backends': Action(
           function='BackendsAction',
@@ -3989,6 +4000,16 @@ Expected a <directory> and <output_file> arguments."""),
           long_desc="""
 The 'cron_info' command will display the next 'number' runs (default 5) for
 each cron job defined in the cron.yaml file."""),
+
+
+      'start': Action(
+          function='Start',
+          hidden=True,
+          uses_basepath=False,
+          usage='%prog [options] start <file> [file, ...]',
+          short_desc='Start a backend.',
+          long_desc="""
+The 'start' command will put a backend into the START state."""),
 
 
 

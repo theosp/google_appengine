@@ -21,22 +21,21 @@
 """Search API module."""
 
 from search import AddDocumentError
-from search import AddDocumentResult
 from search import AddError
 from search import AddResult
 from search import AtomField
 from search import Cursor
 from search import DateField
 from search import Document
-from search import DocumentOperationResult
 from search import Error
 from search import Field
 from search import FieldExpression
+from search import GeoField
+from search import GeoPoint
 from search import HtmlField
 from search import Index
 from search import InternalError
 from search import InvalidRequest
-from search import ListDocumentsResponse
 from search import list_indexes
 from search import ListIndexesResponse
 from search import ListResponse
@@ -46,7 +45,6 @@ from search import OperationResult
 from search import Query
 from search import QueryOptions
 from search import RemoveDocumentError
-from search import RemoveDocumentResult
 from search import RemoveError
 from search import RemoveResult
 from search import RescoringMatchScorer

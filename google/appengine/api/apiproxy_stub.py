@@ -26,7 +26,11 @@
 
 
 
+from __future__ import with_statement
 
+
+
+import threading
 
 from google.appengine.api import apiproxy_rpc
 from google.appengine.runtime import apiproxy_errors
@@ -56,6 +60,11 @@ class APIProxyStub(object):
     self.__service_name = service_name
     self.__max_request_size = max_request_size
 
+
+
+    self._mutex = threading.RLock()
+    self.__error = None
+
   def CreateRPC(self):
     """Creates RPC object instance.
 
@@ -83,5 +92,36 @@ class APIProxyStub(object):
     messages = []
     assert request.IsInitialized(messages), messages
 
-    method = getattr(self, '_Dynamic_' + call)
-    method(request, response)
+    if self.__error:
+
+
+      raise self.__error
+    else:
+      method = getattr(self, '_Dynamic_' + call)
+      method(request, response)
+
+  def SetError(self, error):
+    """Set an error condition that is always raised when calls made to stub.
+
+    Args:
+      error: An instance of apiproxy_errors.Error or None for no error.
+    """
+    assert error is None or isinstance(error, apiproxy_errors.Error)
+    self.__error = error
+
+
+def Synchronized(method):
+  """Decorator to acquire a mutex around an APIProxyStub method.
+
+  Args:
+    method: An unbound method of APIProxyStub or a subclass.
+
+  Returns:
+    The method, altered such it acquires self._mutex throughout its execution.
+  """
+
+  def WrappedMethod(self, *args, **kwargs):
+    with self._mutex:
+      return method(self, *args, **kwargs)
+
+  return WrappedMethod

@@ -135,13 +135,14 @@ except:
   request_environment = None
   runtime = None
 
+from google.appengine.tools import dev_appserver_apiserver
+from google.appengine.tools import dev_appserver_blobimage
 from google.appengine.tools import dev_appserver_blobstore
 from google.appengine.tools import dev_appserver_channel
-from google.appengine.tools import dev_appserver_blobimage
 from google.appengine.tools import dev_appserver_import_hook
 from google.appengine.tools import dev_appserver_login
-from google.appengine.tools import dev_appserver_oauth
 from google.appengine.tools import dev_appserver_multiprocess as multiprocess
+from google.appengine.tools import dev_appserver_oauth
 from google.appengine.tools import dev_appserver_upload
 
 from google.storage.speckle.python.api import rdbms
@@ -490,6 +491,10 @@ class URLDispatcher(object):
       dispatched_output: StringIO buffer containing the results from the
        dispatched
       original_output: The original output file.
+
+    Returns:
+      None if request handling is complete.
+      A new AppServerRequest instance if internal redirect is required.
     """
     original_output.write(dispatched_output.read())
 
@@ -691,7 +696,7 @@ class MatcherDispatcher(URLDispatcher):
                                               outfile,
                                               base_env_dict=base_env_dict)
 
-        if forward_request:
+        while forward_request:
 
           logging.info('Internal redirection to %s',
                        forward_request.relative_url)
@@ -701,7 +706,7 @@ class MatcherDispatcher(URLDispatcher):
                         dict(base_env_dict))
 
           new_outfile.seek(0)
-          dispatcher.EndRedirect(new_outfile, outfile)
+          forward_request = dispatcher.EndRedirect(new_outfile, outfile)
 
 
       return
@@ -871,25 +876,38 @@ def ClearAllButEncodingsModules(module_dict):
       del module_dict[module_name]
 
 
-def UpdateNotSharedModulesInParents(module_dict):
-  """Replace modules not shared between the hardened and unhardened parts of the
-  process in their parent packages.
+def ConnectAndDisconnectChildModules(old_module_dict, new_module_dict):
+  """Prepares for switching from old_module_dict to new_module_dict.
 
-  If foo.bar is not shared then this replaces the reference to bar contained in
-  foo with the foo.bar in module_dict if it is present and deletes it otherwise.
+  Disconnects child modules going away from parents that remain, and reconnects
+  child modules that are being added back in to old parents.  This is needed to
+  satisfy code that follows the getattr() descendant chain rather than looking
+  up the desired module directly in the module dict.
 
   Args:
-    module_dict: A dict containing the modules to be added to sys.modules.
-
+    old_module_dict: The module dict being replaced, looks like sys.modules.
+    new_module_dict: The module dict takings its place, looks like sys.modules.
   """
-  for prefix in NOT_SHARED_MODULE_PREFIXES:
-    parent_name, _, submodule_name = prefix.rpartition('.')
-    parent = module_dict.get(parent_name)
-    if parent:
-      if prefix in module_dict:
-        setattr(parent, submodule_name, module_dict[prefix])
-      elif hasattr(parent, submodule_name):
-        delattr(parent, submodule_name)
+  old_keys = set(old_module_dict.keys())
+  new_keys = set(new_module_dict.keys())
+  for deleted_module_name in old_keys - new_keys:
+    if old_module_dict[deleted_module_name] is None:
+      continue
+    segments = deleted_module_name.rsplit('.', 1)
+    if len(segments) == 2:
+      parent_module = new_module_dict.get(segments[0])
+      if parent_module and hasattr(parent_module, segments[1]):
+        delattr(parent_module, segments[1])
+  for added_module_name in new_keys - old_keys:
+    if new_module_dict[added_module_name] is None:
+      continue
+    segments = added_module_name.rsplit('.', 1)
+    if len(segments) == 2:
+      parent_module = old_module_dict.get(segments[0])
+      child_module = new_module_dict[added_module_name]
+      if (parent_module and
+          getattr(parent_module, segments[1], None) is not child_module):
+        setattr(parent_module, segments[1], child_module)
 
 
 
@@ -1017,8 +1035,8 @@ def CheckScriptExists(cgi_path, handler_path):
       like 'foo/bar/baz.py'). May contain $PYTHON_LIB references.
 
   Raises:
-    CouldNotFindModuleError if the given handler_path is a file and doesn't have
-    the expected extension.
+    CouldNotFindModuleError: if the given handler_path is a file and doesn't
+    have the expected extension.
   """
   if handler_path.startswith(PYTHON_LIB_VAR + '/'):
 
@@ -1562,9 +1580,9 @@ def ExecuteCGI(config,
   app_log_handler = None
 
   try:
+    ConnectAndDisconnectChildModules(sys.modules, module_dict)
     ClearAllButEncodingsModules(sys.modules)
     sys.modules.update(module_dict)
-    UpdateNotSharedModulesInParents(module_dict)
     sys.argv = [cgi_path]
 
     sys.stdin = cStringIO.StringIO(infile.getvalue())
@@ -1643,9 +1661,9 @@ def ExecuteCGI(config,
 
 
     module_dict.update(sys.modules)
+    ConnectAndDisconnectChildModules(sys.modules, old_module_dict)
     ClearAllButEncodingsModules(sys.modules)
     sys.modules.update(old_module_dict)
-    UpdateNotSharedModulesInParents(old_module_dict)
 
     __builtin__.__dict__.update(old_builtin)
     sys.argv = old_argv
@@ -1828,6 +1846,7 @@ class StaticFileConfigMatcher(object):
   Specifically:
   - Computes mime type based on URLMap and file extension.
   - Decides on cache expiration time based on URLMap and default expiration.
+  - Decides what HTTP headers to add to responses.
 
   To determine the mime type, we first see if there is any mime-type property
   on each URLMap entry. If non is specified, we use the mimetypes module to
@@ -1837,7 +1856,6 @@ class StaticFileConfigMatcher(object):
 
   def __init__(self,
                url_map_list,
-               path_adjuster,
                default_expiration):
     """Initializer.
 
@@ -1845,7 +1863,6 @@ class StaticFileConfigMatcher(object):
       url_map_list: List of appinfo.URLMap objects.
         If empty or None, then we always use the mime type chosen by the
         mimetypes module.
-      path_adjuster: PathAdjuster object used to adjust application file paths.
       default_expiration: String describing default expiration time for browser
         based caching of static files.  If set to None this disallows any
         browser caching of static content.
@@ -1857,67 +1874,69 @@ class StaticFileConfigMatcher(object):
 
 
     self._patterns = []
+    for url_map in url_map_list or []:
 
-    if url_map_list:
-      for entry in url_map_list:
-        handler_type = entry.GetHandlerType()
-        if handler_type not in (appinfo.STATIC_FILES, appinfo.STATIC_DIR):
-          continue
+      handler_type = url_map.GetHandlerType()
+      if handler_type not in (appinfo.STATIC_FILES, appinfo.STATIC_DIR):
+        continue
 
-        if handler_type == appinfo.STATIC_FILES:
-          regex = entry.upload + '$'
-        else:
-          path = entry.static_dir
-          if path[-1] == '/':
-            path = path[:-1]
-          regex = re.escape(path + os.path.sep) + r'(.*)'
+      path_re = _StaticFilePathRe(url_map)
+      try:
+        self._patterns.append((re.compile(path_re), url_map))
+      except re.error, e:
+        raise InvalidAppConfigError('regex %s does not compile: %s' %
+                                    (path_re, e))
 
-        try:
-          path_re = re.compile(regex)
-        except re.error, e:
-          raise InvalidAppConfigError('regex %s does not compile: %s' %
-                                      (regex, e))
+  _DUMMY_URLMAP = appinfo.URLMap()
 
-        if self._default_expiration is None:
+  def _FirstMatch(self, path):
+    """Returns the first appinfo.URLMap that matches path, or a dummy instance.
 
-          expiration = 0
-        elif entry.expiration is None:
+    A dummy instance is returned when no appinfo.URLMap matches path (see the
+    URLMap.static_file_path_re property). When a dummy instance is returned, it
+    is always the same one. The dummy instance is constructed simply by doing
+    the following:
 
-          expiration = self._default_expiration
-        else:
-          expiration = appinfo.ParseExpiration(entry.expiration)
+      appinfo.URLMap()
 
-        self._patterns.append((path_re, entry.mime_type, expiration))
+    Args:
+      path: A string containing the file's path relative to the app.
+
+    Returns:
+      The first appinfo.URLMap (in the list that was passed to the constructor)
+      that matches path. Matching depends on whether URLMap is a static_dir
+      handler or a static_files handler. In either case, matching is done
+      according to the URLMap.static_file_path_re property.
+    """
+    for path_re, url_map in self._patterns:
+      if path_re.match(path):
+        return url_map
+    return StaticFileConfigMatcher._DUMMY_URLMAP
 
   def IsStaticFile(self, path):
     """Tests if the given path points to a "static" file.
 
     Args:
-      path: String containing the file's path relative to the app.
+      path: A string containing the file's path relative to the app.
 
     Returns:
       Boolean, True if the file was configured to be static.
     """
-    for (path_re, _, _) in self._patterns:
-      if path_re.match(path):
-        return True
-    return False
+    return self._FirstMatch(path) is not self._DUMMY_URLMAP
 
   def GetMimeType(self, path):
     """Returns the mime type that we should use when serving the specified file.
 
     Args:
-      path: String containing the file's path relative to the app.
+      path: A string containing the file's path relative to the app.
 
     Returns:
       String containing the mime type to use. Will be 'application/octet-stream'
       if we have no idea what it should be.
     """
-    for (path_re, mimetype, unused_expiration) in self._patterns:
-      if mimetype is not None:
-        the_match = path_re.match(path)
-        if the_match:
-          return mimetype
+    url_map = self._FirstMatch(path)
+    if url_map.mime_type is not None:
+      return url_map.mime_type
 
 
     unused_filename, extension = os.path.splitext(path)
@@ -1927,18 +1946,33 @@ class StaticFileConfigMatcher(object):
     """Returns the cache expiration duration to be users for the given file.
 
     Args:
-      path: String containing the file's path relative to the app.
+      path: A string containing the file's path relative to the app.
 
     Returns:
       Integer number of seconds to be used for browser cache expiration time.
     """
-    for (path_re, unused_mimetype, expiration) in self._patterns:
-      the_match = path_re.match(path)
-      if the_match:
-        return expiration
 
+    if self._default_expiration is None:
+      return 0
 
-    return self._default_expiration or 0
+    url_map = self._FirstMatch(path)
+    if url_map.expiration is None:
+      return self._default_expiration
+
+    return appinfo.ParseExpiration(url_map.expiration)
+
+  def GetHttpHeaders(self, path):
+    """Returns http_headers of the matching appinfo.URLMap, or an empty one.
+
+    Args:
+      path: A string containing the file's path relative to the app.
+
+    Returns:
+      A user-specified HTTP headers to be used in static content response. These
+      headers are contained in an appinfo.HttpHeadersDict, which maps header
+      names to values (both strings).
+    """
+    return self._FirstMatch(path).http_headers or appinfo.HttpHeadersDict()
 
 
 
@@ -1998,10 +2032,7 @@ class FileDispatcher(URLDispatcher):
     self._static_file_config_matcher = static_file_config_matcher
     self._read_data_file = read_data_file
 
-  def Dispatch(self,
-               request,
-               outfile,
-               base_env_dict=None):
+  def Dispatch(self, request, outfile, base_env_dict=None):
     """Reads the file and returns the response status and data."""
     full_path = self._path_adjuster.AdjustPath(request.path)
     status, data = self._read_data_file(full_path)
@@ -2012,27 +2043,46 @@ class FileDispatcher(URLDispatcher):
     if_match_etag = request.headers.get('if-match', None)
     if_none_match_etag = request.headers.get('if-none-match', '').split(',')
 
+    http_headers = self._static_file_config_matcher.GetHttpHeaders(request.path)
+    def WriteHeader(name, value):
+      if http_headers.Get(name) is None:
+        outfile.write('%s: %s\r\n' % (name, value))
+
+
+
+
+
     if if_match_etag and not self._CheckETagMatches(if_match_etag.split(','),
                                                     current_etag,
                                                     False):
       outfile.write('Status: %s\r\n' % httplib.PRECONDITION_FAILED)
-      outfile.write('ETag: "%s"\r\n' % current_etag)
+      WriteHeader('ETag', current_etag)
       outfile.write('\r\n')
     elif self._CheckETagMatches(if_none_match_etag, current_etag, True):
       outfile.write('Status: %s\r\n' % httplib.NOT_MODIFIED)
-      outfile.write('ETag: "%s"\r\n' % current_etag)
+      WriteHeader('ETag', current_etag)
       outfile.write('\r\n')
     else:
-      outfile.write('Status: %d\r\n' % status)
-      outfile.write('Content-type: %s\r\n' % content_type)
-      if expiration:
 
-        outfile.write('Expires: %s\r\n'
-                      % email.Utils.formatdate(time.time() + expiration,
-                                               usegmt=True))
-        outfile.write('Cache-Control: public, max-age=%i\r\n' % expiration)
+
+
+      outfile.write('Status: %d\r\n' % status)
+
+      WriteHeader('Content-Type', content_type)
+
+
+      if expiration:
+        fmt = email.Utils.formatdate
+        WriteHeader('Expires', fmt(time.time() + expiration, usegmt=True))
+        WriteHeader('Cache-Control', 'public, max-age=%i' % expiration)
+
+
       if static_file:
-        outfile.write('ETag: "%s"\r\n' % current_etag)
+        WriteHeader('ETag', '"%s"' % current_etag)
+
+      for header in http_headers.iteritems():
+        outfile.write('%s: %s\r\n' % header)
+
       outfile.write('\r\n')
       outfile.write(data)
 
@@ -2160,7 +2210,7 @@ def IgnoreHeadersRewriter(response):
   Certain response headers cannot be modified by an Application.  For a
   complete list of these headers please see:
 
-    http://code.google.com/appengine/docs/webapp/responseclass.html#Disallowed_HTTP_Response_Headers
+    https://developers.google.com/appengine/docs/python/tools/webapp/responseclass#Disallowed_HTTP_Response_Headers
 
   This rewriter simply removes those headers.
   """
@@ -2506,6 +2556,7 @@ def CreateRequestHandler(root_path,
     login_url: Relative URL which should be used for handling user logins.
     static_caching: True if browser caching of static files should be allowed.
     default_partition: Default partition to use in the application id.
+    persist_logs: If true, log records should be durably persisted.
 
   Returns:
     Sub-class of BaseHTTPRequestHandler.
@@ -2650,7 +2701,7 @@ def CreateRequestHandler(root_path,
                                                                'request.')
 
       try:
-        request_file = os.fdopen(request_descriptor, 'wb')
+        request_file = open(request_file_name, 'wb')
         try:
           CopyStreamPart(self.rfile,
                          request_file,
@@ -2671,7 +2722,17 @@ def CreateRequestHandler(root_path,
           request_file.close()
       finally:
         try:
-          os.remove(request_file_name)
+          os.close(request_descriptor)
+
+
+
+          try:
+            os.remove(request_file_name)
+          except OSError, err:
+            if getattr(err, 'winerror', 0) == os_compat.ERROR_SHARING_VIOLATION:
+              logging.warning('Failed removing %s', request_file_name)
+            else:
+              raise
         except OSError, err:
           if err.errno != errno.ENOENT:
             raise
@@ -2933,6 +2994,34 @@ def ReadAppConfig(appinfo_path, parse_app_config=appinfo_includes.Parse):
     appinfo_file.close()
 
 
+def _StaticFilePathRe(url_map):
+  """Returns a regular expression string that matches static file paths.
+
+  Args:
+    url_map: A fully initialized static_files or static_dir appinfo.URLMap
+      instance.
+
+  Returns:
+    The regular expression matches paths, relative to the application's root
+    directory, of files that this static handler serves. re.compile should
+    accept the returned string.
+
+  Raises:
+    AssertionError: The url_map argument was not an URLMap for a static handler.
+  """
+  handler_type = url_map.GetHandlerType()
+
+
+  if handler_type == 'static_files':
+    return url_map.upload + '$'
+
+  elif handler_type == 'static_dir':
+    path = url_map.static_dir.rstrip('/')
+    return re.escape(path + os.path.sep) + r'(.*)'
+
+  assert False, 'This property only applies to static handlers.'
+
+
 def CreateURLMatcherFromMaps(config,
                              root_path,
                              url_map_list,
@@ -2979,7 +3068,6 @@ def CreateURLMatcherFromMaps(config,
   cgi_dispatcher = create_cgi_dispatcher(config, module_dict,
                                          root_path, path_adjuster)
   static_file_config_matcher = StaticFileConfigMatcher(url_map_list,
-                                                       path_adjuster,
                                                        default_expiration)
   file_dispatcher = create_file_dispatcher(config, path_adjuster,
                                            static_file_config_matcher)
@@ -3290,7 +3378,24 @@ def SetupStubs(app_id, **config):
 
   if not multiprocess.GlobalProcess().MaybeConfigureRemoteDataApis():
 
+
+
+
+
+
     apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'app_identity_service',
+        app_identity_stub.AppIdentityServiceStub())
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'capability_service',
+        capability_stub.CapabilityServiceStub())
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'conversion',
+        conversion_stub.ConversionServiceStub())
 
     if use_sqlite:
       datastore = datastore_sqlite_stub.DatastoreSqliteStub(
@@ -3308,6 +3413,15 @@ def SetupStubs(app_id, **config):
         'datastore_v3', datastore)
 
     apiproxy_stub_map.apiproxy.RegisterStub(
+        'mail',
+        mail_stub.MailServiceStub(smtp_host,
+                                  smtp_port,
+                                  smtp_user,
+                                  smtp_password,
+                                  enable_sendmail=enable_sendmail,
+                                  show_mail_body=show_mail_body))
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
         'memcache',
         memcache_stub.MemcacheServiceStub())
 
@@ -3318,6 +3432,14 @@ def SetupStubs(app_id, **config):
             auto_task_running=(not disable_task_running),
             task_retry_seconds=task_retry_seconds,
             default_http_server='%s:%s' % (serve_address, serve_port)))
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'urlfetch',
+        urlfetch_stub.URLFetchServiceStub())
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'xmpp',
+        xmpp_service_stub.XmppServiceStub())
 
 
 
@@ -3334,31 +3456,14 @@ def SetupStubs(app_id, **config):
   fixed_logout_url = '%s&%s' % (fixed_login_url,
                                 dev_appserver_login.LOGOUT_PARAM)
 
+
+
+
+
   apiproxy_stub_map.apiproxy.RegisterStub(
       'user',
       user_service_stub.UserServiceStub(login_url=fixed_login_url,
                                         logout_url=fixed_logout_url))
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'urlfetch',
-      urlfetch_stub.URLFetchServiceStub())
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'mail',
-      mail_stub.MailServiceStub(smtp_host,
-                                smtp_port,
-                                smtp_user,
-                                smtp_password,
-                                enable_sendmail=enable_sendmail,
-                                show_mail_body=show_mail_body))
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'capability_service',
-      capability_stub.CapabilityServiceStub())
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'xmpp',
-      xmpp_service_stub.XmppServiceStub())
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'channel',
@@ -3371,10 +3476,6 @@ def SetupStubs(app_id, **config):
           apiproxy_stub_map.apiproxy.GetStub('taskqueue')))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
-      'app_identity_service',
-      app_identity_stub.AppIdentityServiceStub())
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
       'search',
       simple_search_stub.SearchServiceStub())
 
@@ -3385,10 +3486,6 @@ def SetupStubs(app_id, **config):
 
 
 
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'conversion',
-      conversion_stub.ConversionServiceStub())
 
   try:
     from google.appengine.api.images import images_stub
@@ -3430,6 +3527,7 @@ def TearDownStubs():
 
 
   if isinstance(datastore_stub, datastore_stub_util.BaseTransactionManager):
+    logging.info('Applying all pending transactions and saving the datastore')
     datastore_stub.Write()
 
 
@@ -3445,14 +3543,14 @@ def CreateImplicitMatcher(
   """Creates a URLMatcher instance that handles internal URLs.
 
   Used to facilitate handling user login/logout, debugging, info about the
-  currently running app, etc.
+  currently running app, quitting the dev appserver, etc.
 
   Args:
     config: AppInfoExternal instance representing the parsed app.yaml file.
     module_dict: Dictionary in the form used by sys.modules.
     root_path: Path to the root of the application.
     login_url: Relative URL which should be used for handling user login/logout.
-    create_path_adjuster: Used for dependedency injection.
+      create_path_adjuster: Used for dependedency injection.
     create_local_dispatcher: Used for dependency injection.
     create_cgi_dispatcher: Used for dependedency injection.
     get_blob_storage: Used for dependency injection.
@@ -3462,6 +3560,20 @@ def CreateImplicitMatcher(
   """
   url_matcher = URLMatcher()
   path_adjuster = create_path_adjuster(root_path)
+
+
+
+
+  def _HandleQuit():
+    raise KeyboardInterrupt
+  quit_dispatcher = create_local_dispatcher(config, sys.modules, path_adjuster,
+                                            _HandleQuit)
+  url_matcher.AddURL('/_ah/quit?',
+                     quit_dispatcher,
+                     '',
+                     False,
+                     False,
+                     appinfo.AUTH_FAIL_ACTION_REDIRECT)
 
 
 
@@ -3529,6 +3641,13 @@ def CreateImplicitMatcher(
                      False,
                      appinfo.AUTH_FAIL_ACTION_UNAUTHORIZED)
 
+  apiserver_dispatcher = dev_appserver_apiserver.CreateApiserverDispatcher()
+  url_matcher.AddURL(dev_appserver_apiserver.API_SERVING_PATTERN,
+                     apiserver_dispatcher,
+                     '',
+                     False,
+                     False,
+                     appinfo.AUTH_FAIL_ACTION_UNAUTHORIZED)
 
   return url_matcher
 
@@ -3563,6 +3682,7 @@ def CreateServer(root_path,
     python_path_list: Used for dependency injection.
     sdk_dir: Directory where the SDK is stored.
     default_partition: Default partition to use for the appid.
+    persist_logs: If true, log records should be durably persisted.
 
   Returns:
     Instance of BaseHTTPServer.HTTPServer that's ready to start accepting.

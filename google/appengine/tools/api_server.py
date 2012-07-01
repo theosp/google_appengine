@@ -107,6 +107,21 @@ def _ClearProspectiveSearchStorage(prospective_search_path):
                       e)
 
 
+
+
+THREAD_SAFE_SERVICES = frozenset((
+    'app_identity_service',
+    'capability_service',
+    'channel',
+    'conversion',
+    'mail',
+    'memcache',
+    'urlfetch',
+    'user',
+    'xmpp',
+))
+
+
 def _ExecuteRequest(request):
   """Executes an API method call and returns the response object.
 
@@ -134,9 +149,17 @@ def _ExecuteRequest(request):
   request_data.ParseFromString(request.request())
   response_data = response_class()
 
-  with GLOBAL_API_LOCK:
+  def MakeRequest():
     apiproxy_stub_map.MakeSyncCall(service, method, request_data,
                                    response_data)
+
+
+
+  if service in THREAD_SAFE_SERVICES:
+    MakeRequest()
+  else:
+    with GLOBAL_API_LOCK:
+      MakeRequest()
   return response_data
 
 
@@ -280,6 +303,12 @@ def _SetupStubs(
 
 
 
+
+
+  os.environ['APPLICATION_ID'] = app_id
+
+
+
   apiproxy_stub_map.apiproxy.RegisterStub(
       'app_identity_service',
       app_identity_stub.AppIdentityServiceStub())
@@ -407,6 +436,7 @@ def _SetupStubs(
 def _TearDownStubs():
   """Clean up any stubs that need cleanup."""
 
+  logging.info('Applying all pending transactions and saving the datastore')
   datastore_stub = apiproxy_stub_map.apiproxy.GetStub('datastore_v3')
   datastore_stub.Write()
 

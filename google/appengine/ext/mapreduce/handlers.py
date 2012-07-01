@@ -177,45 +177,50 @@ class MapperWorkerCallbackHandler(util.HugeTaskHandler):
         scan_aborted = False
         entity = None
 
+        try:
 
 
-        if not quota_consumer or quota_consumer.consume():
-          for entity in input_reader:
-            if isinstance(entity, db.Model):
-              shard_state.last_work_item = repr(entity.key())
-            else:
-              shard_state.last_work_item = repr(entity)[:100]
+          if not quota_consumer or quota_consumer.consume():
+            for entity in input_reader:
+              if isinstance(entity, db.Model):
+                shard_state.last_work_item = repr(entity.key())
+              else:
+                shard_state.last_work_item = repr(entity)[:100]
 
-            scan_aborted = not self.process_data(
-                entity, input_reader, ctx, tstate)
+              scan_aborted = not self.process_data(
+                  entity, input_reader, ctx, tstate)
 
 
-            if (quota_consumer and not scan_aborted and
-                not quota_consumer.consume()):
-              scan_aborted = True
-            if scan_aborted:
-              break
-        else:
+              if (quota_consumer and not scan_aborted and
+                  not quota_consumer.consume()):
+                scan_aborted = True
+              if scan_aborted:
+                break
+          else:
+            scan_aborted = True
+
+          if not scan_aborted:
+            logging.info("Processing done for shard %d of job '%s'",
+                         shard_state.shard_number, shard_state.mapreduce_id)
+
+
+            if quota_consumer:
+              quota_consumer.put(1)
+            shard_state.active = False
+            shard_state.result_status = model.ShardState.RESULT_SUCCESS
+
+          operation.counters.Increment(
+              context.COUNTER_MAPPER_WALLTIME_MS,
+              int((time.time() - self._start_time)*1000))(ctx)
+
+
+
+          ctx.flush()
+        except errors.FailJobError, e:
+          logging.error("Job failed: %s", e)
           scan_aborted = True
-
-
-        if not scan_aborted:
-          logging.info("Processing done for shard %d of job '%s'",
-                       shard_state.shard_number, shard_state.mapreduce_id)
-
-
-          if quota_consumer:
-            quota_consumer.put(1)
           shard_state.active = False
-          shard_state.result_status = model.ShardState.RESULT_SUCCESS
-
-      operation.counters.Increment(
-          context.COUNTER_MAPPER_WALLTIME_MS,
-          int((time.time() - self._start_time)*1000))(ctx)
-
-
-
-      ctx.flush()
+          shard_state.result_status = model.ShardState.RESULT_FAILED
 
       if not shard_state.active:
 
@@ -422,6 +427,8 @@ class ControllerCallbackHandler(util.HugeTaskHandler):
       state.active_shards = len(active_shards)
       state.failed_shards = len(failed_shards)
       state.aborted_shards = len(aborted_shards)
+      if not control and failed_shards:
+        model.MapreduceControl.abort(spec.mapreduce_id)
 
     if (not state.active and control and
         control.command == model.MapreduceControl.ABORT):
@@ -867,9 +874,6 @@ class StartJobHandler(base_handler.PostJsonHandler):
                       "for non-transactional starts.")
 
 
-    mapper_spec.get_handler()
-
-
     mapper_input_reader_class = mapper_spec.input_reader_class()
     mapper_input_reader_class.validate(mapper_spec)
 
@@ -884,6 +888,14 @@ class StartJobHandler(base_handler.PostJsonHandler):
         mapper_spec.to_json(),
         mapreduce_params,
         hooks_class_name)
+
+
+    ctx = context.Context(mapreduce_spec, None)
+    context.Context._set(ctx)
+    try:
+      mapper_spec.get_handler()
+    finally:
+      context.Context._set(None)
 
     kickoff_params = {"mapreduce_spec": mapreduce_spec.to_json_str()}
     if _app:

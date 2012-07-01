@@ -51,10 +51,7 @@ import logging
 import math
 import os
 import random
-try:
-  import json as simplejson
-except ImportError:
-  import simplejson
+import simplejson
 import time
 
 from google.appengine.api import datastore_errors
@@ -899,11 +896,11 @@ class MapreduceControl(db.Model):
     return db.Key.from_path(cls.kind(), "%s:%s" % (mapreduce_id, cls._KEY_NAME))
 
   @classmethod
-  def abort(cls, mapreduce_id):
+  def abort(cls, mapreduce_id, **kwargs):
     """Causes a job to abort.
 
     Args:
       mapreduce_id: The job to abort. Not verified as a valid job.
     """
     cls(key_name="%s:%s" % (mapreduce_id, cls._KEY_NAME),
-        command=cls.ABORT).put()
+        command=cls.ABORT).put(**kwargs)

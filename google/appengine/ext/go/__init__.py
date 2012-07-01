@@ -98,6 +98,14 @@ ENV_PASSTHROUGH = re.compile(
 APP_CONFIG = None
 
 
+def quiet_kill(pid):
+  """Send a SIGTERM to pid; won't raise an exception if pid is not running."""
+  try:
+    os.kill(pid, signal.SIGTERM)
+  except OSError:
+    pass
+
+
 def pick_unused_port():
   for _ in range(10):
     port = int(random.uniform(32768, 60000))
@@ -120,7 +128,7 @@ def gab_work_dir():
                           'com.google.GoAppEngine')
     else:
 
-      base = os.path.join(os.getenv('HOME'), '.cache')
+      base = os.path.join(os.path.expanduser('~'), '.cache')
 
 
   if os.path.islink(base):
@@ -301,7 +309,7 @@ def wait_until_go_app_ready(proc, tee):
       return
     except:
       time.sleep(0.1)
-  os.kill(proc.pid, signal.SIGTERM)
+  quiet_kill(proc.pid)
   raise dev_appserver.ExecuteError('unable to start ' + GO_APP_NAME, tee.buf)
 
 
@@ -351,6 +359,7 @@ class GoApp:
       raise Exception('no goroot found at ' + self.goroot)
 
 
+    self.arch = None
     arch_map = {
         'arm': '5',
         'amd64': '6',
@@ -371,7 +380,7 @@ class GoApp:
 
   def cleanup(self):
     if self.proc:
-      os.kill(self.proc.pid, signal.SIGTERM)
+      quiet_kill(self.proc.pid)
       self.proc = None
 
   def make_and_run(self, env):
@@ -396,7 +405,7 @@ class GoApp:
       restart = True
 
     if restart and self.proc:
-      os.kill(self.proc.pid, signal.SIGTERM)
+      quiet_kill(self.proc.pid)
       self.proc.wait()
       self.proc = None
     if rebuild:
@@ -414,6 +423,9 @@ class GoApp:
       for k, v in env.items():
         if ENV_PASSTHROUGH.match(k):
           limited_env[k] = v
+
+      if 'SYSTEMROOT' in os.environ:
+        limited_env['SYSTEMROOT'] = os.environ['SYSTEMROOT']
       self.proc_start = app_mtime
       self.proc = subprocess.Popen([bin_name,
           '-addr_http', 'tcp:127.0.0.1:%d' % GO_HTTP_PORT,
@@ -465,7 +477,31 @@ def execute_go_cgi(root_path, handler_path, cgi_path, env, infile, outfile):
     GO_HTTP_PORT = pick_unused_port()
     GO_API_PORT = pick_unused_port()
     atexit.register(cleanup)
-    OldSigTermHandler = signal.signal(signal.SIGTERM, SigTermHandler)
+    try:
+
+
+
+
+
+
+
+
+
+      OldSigTermHandler = signal.signal(signal.SIGTERM, SigTermHandler)
+    except ValueError:
+
+
+
+
+
+
+
+
+
+
+
+
+      pass
     DelegateServer()
     RAPI_HANDLER = handler.ApiCallHandler()
     GO_APP = GoApp(root_path)

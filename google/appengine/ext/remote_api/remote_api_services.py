@@ -127,6 +127,9 @@ SERVICE_PB_MAP = {
                              file_service_pb.GetShuffleStatusResponse),
         'GetCapabilities': (file_service_pb.GetCapabilitiesRequest,
                             file_service_pb.GetCapabilitiesResponse),
+        'GetDefaultGsBucketName':
+            (file_service_pb.GetDefaultGsBucketNameRequest,
+             file_service_pb.GetDefaultGsBucketNameResponse),
     },
     'images': {
         'Transform': (images_service_pb.ImagesTransformRequest,
@@ -168,6 +171,7 @@ SERVICE_PB_MAP = {
         'Transaction': (remote_api_pb.TransactionRequest,
                         datastore_pb.PutResponse),
         'GetIDs':      (datastore_pb.PutRequest, datastore_pb.PutResponse),
+        'GetIDsXG':    (datastore_pb.PutRequest, datastore_pb.PutResponse),
     },
     'search': {
         'IndexDocument': (search_service_pb.IndexDocumentRequest,

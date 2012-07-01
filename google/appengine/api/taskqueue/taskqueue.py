@@ -53,7 +53,7 @@ __all__ = [
     'TooManyTasksError', 'TransientError', 'UnknownQueueError',
     'InvalidLeaseTimeError', 'InvalidMaxTasksError', 'InvalidDeadlineError',
     'InvalidQueueModeError', 'TransactionalRequestTooLargeError',
-    'TaskLeaseExpiredError', 'QueuePausedError',
+    'TaskLeaseExpiredError', 'QueuePausedError', 'InvalidEtaError',
 
     'MAX_QUEUE_NAME_LENGTH', 'MAX_TASK_NAME_LENGTH', 'MAX_TASK_SIZE_BYTES',
     'MAX_PULL_TASK_SIZE_BYTES', 'MAX_PUSH_TASK_SIZE_BYTES',
@@ -130,6 +130,10 @@ class TombstonedTaskError(InvalidTaskError):
 
 class InvalidUrlError(InvalidTaskError):
   """The task's relative URL is invalid."""
+
+
+class InvalidEtaError(InvalidTaskError):
+  """The task's ETA is invalid."""
 
 
 class BadTaskStateError(Error):
@@ -249,6 +253,8 @@ _DEFAULT_QUEUE = 'default'
 
 _DEFAULT_QUEUE_PATH = '/_ah/queue'
 
+_MAX_COUNTDOWN_SECONDS = 3600 * 24 * 30
+
 _METHOD_MAP = {
     'GET': taskqueue_service_pb.TaskQueueAddRequest.GET,
     'POST': taskqueue_service_pb.TaskQueueAddRequest.POST,
@@ -289,7 +295,7 @@ _ERROR_MAPPING = {
         TaskAlreadyExistsError,
     taskqueue_service_pb.TaskQueueServiceError.TOMBSTONED_TASK:
         TombstonedTaskError,
-    taskqueue_service_pb.TaskQueueServiceError.INVALID_ETA: InvalidTaskError,
+    taskqueue_service_pb.TaskQueueServiceError.INVALID_ETA: InvalidEtaError,
     taskqueue_service_pb.TaskQueueServiceError.INVALID_REQUEST: Error,
     taskqueue_service_pb.TaskQueueServiceError.UNKNOWN_TASK: Error,
     taskqueue_service_pb.TaskQueueServiceError.TOMBSTONED_QUEUE: Error,
@@ -383,6 +389,7 @@ def _flatten_params(params):
   Returns:
     List of (key, value) tuples.
   """
+
   def get_string(value):
     if isinstance(value, unicode):
       return unicode(value).encode('utf-8')
@@ -407,6 +414,40 @@ def _flatten_params(params):
         param_list.extend((key, get_string(v)) for v in iterator)
 
   return param_list
+
+
+def _TranslateError(error, detail=''):
+  """Translates a TaskQueueServiceError into an exception.
+
+  Args:
+    error: Value from TaskQueueServiceError enum.
+    detail: A human-readable description of the error.
+
+  Returns:
+    The corresponding Exception sub-class for that error code.
+  """
+  if (error >= taskqueue_service_pb.TaskQueueServiceError.DATASTORE_ERROR
+      and isinstance(error, int)):
+    from google.appengine.api import datastore
+    datastore_exception = datastore._DatastoreExceptionFromErrorCodeAndDetail(
+        error - taskqueue_service_pb.TaskQueueServiceError.DATASTORE_ERROR,
+        detail)
+
+    class JointException(datastore_exception.__class__, DatastoreError):
+      """There was a datastore error while accessing the queue."""
+      __msg = (u'taskqueue.DatastoreError caused by: %s %s' %
+               (datastore_exception.__class__, detail))
+
+      def __str__(self):
+        return JointException.__msg
+
+    return JointException()
+  else:
+    exception_class = _ERROR_MAPPING.get(error, None)
+    if exception_class:
+      return exception_class(detail)
+    else:
+      return Error('Application error %s: %s' % (error, detail))
 
 
 class TaskRetryOptions(object):
@@ -564,6 +605,8 @@ class Task(object):
       tag: The tag to be used when grouping by tag (PULL tasks only).
 
     Raises:
+      InvalidEtaError: if the ETA is too far into the future;
+      InvalidTagError: if the tag is too long;
       InvalidTaskError: if any of the parameters are invalid;
       InvalidTaskNameError: if the task name is invalid;
       InvalidUrlError: if the task URL is invalid or too long;
@@ -662,6 +705,9 @@ class Task(object):
     self.__retry_options = kwargs.get('retry_options')
     self.__enqueued = False
     self.__deleted = False
+
+    if self.__eta_posix - time.time() > _MAX_COUNTDOWN_SECONDS:
+      raise InvalidEtaError('ETA too far in the future')
 
     if size_check:
       if self.__method == 'PULL':
@@ -1225,7 +1271,7 @@ class QueueStatistics(object):
       apiproxy_stub_map.MakeSyncCall(
           'taskqueue', 'FetchQueueStats', request, response)
     except apiproxy_errors.ApplicationError, e:
-      raise cls.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
     assert len(queues) == response.queuestats_size(), (
         'Expected %d results, got %d' % (
@@ -1283,7 +1329,7 @@ class Queue(object):
                                      request,
                                      response)
     except apiproxy_errors.ApplicationError, e:
-      raise self.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
   def delete_tasks(self, task):
     """Deletes a Task or list of Tasks in this Queue.
@@ -1346,10 +1392,10 @@ class Queue(object):
     try:
       apiproxy_stub_map.MakeSyncCall('taskqueue', 'Delete', request, response)
     except apiproxy_errors.ApplicationError, e:
-      raise self.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
     assert response.result_size() == len(tasks), (
-        'expected %d results from detele(), got %d' % (
+        'expected %d results from delete(), got %d' % (
             len(tasks), response.result_size()))
 
     exception = None
@@ -1361,7 +1407,7 @@ class Queue(object):
           result == taskqueue_service_pb.TaskQueueServiceError.TOMBSTONED_TASK):
         task._Task__deleted = False
       elif exception is None:
-        exception = self.__TranslateError(result)
+        exception = _TranslateError(result)
 
     if exception is not None:
       raise exception
@@ -1455,7 +1501,7 @@ class Queue(object):
     try:
       self._QueryAndOwnTasks(request, response, deadline)
     except apiproxy_errors.ApplicationError, e:
-      raise self.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
     tasks = []
     for response_task in response.task_list():
@@ -1508,7 +1554,7 @@ class Queue(object):
     try:
       self._QueryAndOwnTasks(request, response, deadline)
     except apiproxy_errors.ApplicationError, e:
-      raise self.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
     tasks = []
     for response_task in response.task_list():
@@ -1621,7 +1667,7 @@ class Queue(object):
     try:
       apiproxy_stub_map.MakeSyncCall('taskqueue', 'BulkAdd', request, response)
     except apiproxy_errors.ApplicationError, e:
-      raise self.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
     assert response.taskresult_size() == len(tasks), (
         'expected %d results from BulkAdd(), got %d' % (
@@ -1638,7 +1684,7 @@ class Queue(object):
             taskqueue_service_pb.TaskQueueServiceError.SKIPPED):
         pass
       elif exception is None:
-        exception = self.__TranslateError(task_result.result())
+        exception = _TranslateError(task_result.result())
 
     if exception is not None:
       raise exception
@@ -1773,39 +1819,6 @@ class Queue(object):
     """Returns the name of this queue."""
     return self.__name
 
-  @staticmethod
-  def __TranslateError(error, detail=''):
-    """Translates a TaskQueueServiceError into an exception.
-
-    Args:
-      error: Value from TaskQueueServiceError enum.
-      detail: A human-readable description of the error.
-
-    Returns:
-      The corresponding Exception sub-class for that error code.
-    """
-    if (error >= taskqueue_service_pb.TaskQueueServiceError.DATASTORE_ERROR
-        and isinstance(error, int)):
-      from google.appengine.api import datastore
-      datastore_exception = datastore._DatastoreExceptionFromErrorCodeAndDetail(
-          error - taskqueue_service_pb.TaskQueueServiceError.DATASTORE_ERROR,
-          detail)
-
-      class JointException(datastore_exception.__class__, DatastoreError):
-        """There was a datastore error while accessing the queue."""
-        __msg = (u'taskqueue.DatastoreError caused by: %s %s' %
-                 (datastore_exception.__class__, detail))
-        def __str__(self):
-          return JointException.__msg
-
-      return JointException()
-    else:
-      exception_class = _ERROR_MAPPING.get(error, None)
-      if exception_class:
-        return exception_class(detail)
-      else:
-        return Error('Application error %s: %s' % (error, detail))
-
   def modify_task_lease(self, task, lease_seconds):
     """Modifies the lease of a task in this queue.
 
@@ -1837,7 +1850,7 @@ class Queue(object):
                                      request,
                                      response)
     except apiproxy_errors.ApplicationError, e:
-      raise self.__TranslateError(e.application_error, e.error_detail)
+      raise _TranslateError(e.application_error, e.error_detail)
 
     task._Task__eta_posix = response.updated_eta_usec() * 1e-6
     task._Task__eta = None
@@ -1867,7 +1880,6 @@ class Queue(object):
     if not isinstance(o, Queue):
       return NotImplemented
     return self.name != o.name or self._app != o._app
-
 
 
 
@@ -1918,6 +1930,7 @@ def add(*args, **kwargs):
       indicated by eta.
     retry_options: TaskRetryOptions used to control when the task will be
       retried if it fails.
+    tag: The tag to be used when grouping by tag (PULL tasks only).
     target: The alternate version/backend on which to execute this task, or
       DEFAULT_APP_VERSION to execute on the application's default version.
 
@@ -1925,13 +1938,17 @@ def add(*args, **kwargs):
     The Task that was added to the queue.
 
   Raises:
-    InvalidTaskError if any of the parameters are invalid;
-    InvalidTaskNameError if the task name is invalid;
-    InvalidUrlError if the task URL is invalid or too long;
-    TaskTooLargeError if the task with its payload is too large.
+    BadTransactionStateError: if the transactional argument is true but this
+      call is being made outside of the context of a transaction.
+    InvalidEtaError: if the ETA is too far into the future.
     InvalidQueueModeError if a task with method PULL is added to a queue in push
       mode, or a task with method not equal to PULL is added to a queue in pull
       mode.
+    InvalidTagError: if the tag is too long.
+    InvalidTaskError if any of the parameters are invalid.
+    InvalidTaskNameError if the task name is invalid.
+    InvalidUrlError if the task URL is invalid or too long.
+    TaskTooLargeError if the task with its payload is too large.
     TransactionalRequestTooLargeError: if transactional is True and the total
       size of the tasks and supporting request data exceeds
       MAX_TRANSACTIONAL_REQUEST_SIZE_BYTES.

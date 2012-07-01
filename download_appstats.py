@@ -40,8 +40,6 @@ SCRIPT_DIR = os.path.join(DIR_PATH, 'google', 'appengine', 'tools')
 GOOGLE_SQL_DIR = os.path.join(
     DIR_PATH, 'google', 'storage', 'speckle', 'python', 'tool')
 
-
-
 EXTRA_PATHS = [
   DIR_PATH,
   os.path.join(DIR_PATH, 'lib', 'antlr3'),
@@ -50,6 +48,7 @@ EXTRA_PATHS = [
   os.path.join(DIR_PATH, 'lib', 'ipaddr'),
   os.path.join(DIR_PATH, 'lib', 'jinja2'),
   os.path.join(DIR_PATH, 'lib', 'protorpc'),
+  os.path.join(DIR_PATH, 'lib', 'PyAMF'),
   os.path.join(DIR_PATH, 'lib', 'markupsafe'),
   os.path.join(DIR_PATH, 'lib', 'webob_0_9'),
   os.path.join(DIR_PATH, 'lib', 'webapp2'),
@@ -114,6 +113,15 @@ def run_file(file_path, globals_, script_dir=SCRIPT_DIR):
   else:
     extra_extra_paths = []
   fix_sys_path(extra_extra_paths)
+
+
+
+
+
+
+
+  if 'google' in sys.modules:
+    del sys.modules['google']
 
   script_name = SCRIPT_EXCEPTIONS.get(script_name, script_name)
   script_dir = SCRIPT_DIR_EXCEPTIONS.get(script_name, script_dir)
