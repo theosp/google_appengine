@@ -26,7 +26,9 @@ http://www.python.org/dev/peps/pep-0249/
 
 import collections
 import datetime
+import decimal
 import exceptions
+import sys
 import time
 import types
 
@@ -148,7 +150,77 @@ _PYTHON_TYPE_TO_JDBC_TYPE = {
     datetime.datetime: jdbc_type.TIMESTAMP,
     datetime.time: jdbc_type.TIME,
     converters.Blob: jdbc_type.BLOB,
+    decimal.Decimal: jdbc_type.DECIMAL,
     }
+
+
+
+_EXCEPTION_TO_ERROR_CODES = {
+    ProgrammingError: (
+        1007,
+        1064,
+        1102,
+        1103,
+        1110,
+        1111,
+        1112,
+        1113,
+        1146,
+        1149,
+        1179,
+        ),
+    DataError: (
+        1265,
+        1263,
+        1264,
+        1230,
+        1171,
+        1406,
+        1441,
+        ),
+    NotSupportedError: (
+        1196,
+        1235,
+        1289,
+        1286,
+        ),
+    IntegrityError: (
+        1062,
+        1169,
+        1216,
+        1452,
+        1217,
+        1451,
+        1215,
+        ),
+    }
+
+
+
+
+_ERROR_CODE_TO_EXCEPTION = {}
+for error, codes in _EXCEPTION_TO_ERROR_CODES.iteritems():
+  for code in codes:
+    _ERROR_CODE_TO_EXCEPTION[code] = error
+
+
+def _ToDbApiException(sql_exception):
+  """Returns a DB-API exception type appropriate for the given sql_exception.
+
+  Args:
+    sql_exception: The client_pb2.SqlException.
+
+  Returns:
+    The appropriate DatabaseError subclass for the error code in the given
+    sql_exception.
+  """
+  exception = _ERROR_CODE_TO_EXCEPTION.get(sql_exception.code)
+  if not exception:
+    if sql_exception.code < 1000:
+      exception = InternalError
+    else:
+      exception = OperationalError
+  return exception(sql_exception.code, sql_exception.message)
 
 
 def _ConvertFormatToQmark(statement, args):
@@ -228,21 +300,33 @@ def _ConvertArgsDictToList(statement, args):
 
 class Cursor(object):
 
-  def __init__(self, conn, use_dict_cursor=False):
+  def __init__(self, conn, use_dict_cursor=False, fetch_size=None):
     """Initializer.
 
     Args:
       conn: A Connection object.
       use_dict_cursor: Optional boolean to convert each row of results into a
           dictionary. Defaults to False.
+      fetch_size: An integer, batch size to fetch the result set from server if
+      streaming. Defaults to None.
     """
     self._conn = conn
-    self._description = None
-    self._rowcount = -1
-    self.arraysize = 1
     self._open = True
-    self.lastrowid = None
     self._use_dict_cursor = use_dict_cursor
+    self._fetch_size = fetch_size
+    self.arraysize = 1
+    self._executed = None
+    self.lastrowid = None
+    self._Reset()
+
+  def _Reset(self):
+
+    self._description = None
+    self._rows = collections.deque()
+    self._rowcount = -1
+    self._statement_id = -1
+    self._more_rows = None
+    self._more_results = None
 
   @property
   def description(self):
@@ -250,6 +334,8 @@ class Cursor(object):
 
   @property
   def rowcount(self):
+    if self._more_rows:
+      return -1
     return self._rowcount
 
   def close(self):
@@ -314,13 +400,15 @@ class Cursor(object):
       raise InterfaceError('unknown JDBC type %d' % datatype)
     return converter(value)
 
-  def _AddBindVariablesToRequest(self, statement, args, bind_variable_factory):
+  def _AddBindVariablesToRequest(self, statement, args, bind_variable_factory,
+                                 direction=client_pb2.BindVariableProto.IN):
     """Add args to the request BindVariableProto list.
 
     Args:
       statement: The SQL statement.
       args: Sequence of arguments to turn into BindVariableProtos.
       bind_variable_factory: A callable which returns new BindVariableProtos.
+      direction: The direction to set for all variables in the request.
 
     Raises:
       InterfaceError: Unknown type used as a bind variable.
@@ -331,6 +419,7 @@ class Cursor(object):
     for i, arg in enumerate(args):
       bv = bind_variable_factory()
       bv.position = i + 1
+      bv.direction = direction
       if arg is None:
         bv.type = jdbc_type.NULL
       else:
@@ -352,50 +441,102 @@ class Cursor(object):
       DatabaseError: A SQL exception occurred.
       OperationalError: RPC problem.
     """
+    if self._fetch_size:
+      request.options.fetch_size = self._fetch_size
     response = self._conn.MakeRequest('Exec', request)
-    result = response.result
-    if result.HasField('sql_exception'):
-      raise DatabaseError('%d: %s' % (result.sql_exception.code,
-                                      result.sql_exception.message))
+    return self._HandleResult(response.result)
 
-    self._rows = collections.deque()
-    if result.rows.columns:
-      self._description = []
-      for column in result.rows.columns:
-        self._description.append(
-            (column.label, column.type, column.display_size, None,
-             column.precision, column.scale, column.nullable))
-    else:
-      self._description = None
+  def _GetDescription(self, result):
+    """Returns a list of tuples describing the columns in the result set.
 
-    if result.rows.tuples:
-      assert self._description, 'Column descriptions do not exist.'
-      column_names = [col[0] for col in self._description]
-      self._rowcount = len(result.rows.tuples)
-      for tuple_proto in result.rows.tuples:
-        row = []
-        nulls = set(tuple_proto.nulls)
-        value_index = 0
-        for i, column_descr in enumerate(self._description):
-          if i in nulls:
-            row.append(None)
-          else:
-            row.append(self._DecodeVariable(column_descr[1],
-                                            tuple_proto.values[value_index]))
-            value_index += 1
-        if self._use_dict_cursor:
-          assert len(column_names) == len(row)
-          row = dict(zip(column_names, row))
+    Args:
+      result: The client_pb2.ResultProto to process.
+
+    Returns:
+      A sequence of sequences describing the columns in the result set. Returns
+      None if column description is not present in the result proto.
+    """
+    if not result.rows.columns:
+
+      return None
+    return [(column.label, column.type, column.display_size, None,
+             column.precision, column.scale, column.nullable)
+            for column in result.rows.columns]
+
+  def _HandleResult(self, result):
+    """Handle the ResultProto from an Exec/ExecOp call.
+
+    Args:
+      result: The client_pb2.ResultProto to handle.
+
+    Returns:
+      The given client_pb2.ResultProto.
+
+    Raises:
+      DatabaseError: A SQL exception occurred.
+    """
+    if result.HasField('rows'):
+      description = self._GetDescription(result)
+      if description:
+        self._description = description
+      if not self._rows:
+
+
+        self._rows = collections.deque()
+      new_rows = self._GetRows(result)
+      if new_rows is not None:
+        if self._rowcount == -1:
+          self._rowcount = len(new_rows)
         else:
-          row = tuple(row)
-        self._rows.append(row)
-    else:
+          self._rowcount += len(new_rows)
+        self._rows.extend(new_rows)
+    elif result.HasField('rows_updated'):
       self._rowcount = result.rows_updated
 
     if result.generated_keys:
       self.lastrowid = long(result.generated_keys[-1])
 
+    if result.HasField('statement_id'):
+      self._statement_id = result.statement_id
+
+    self._more_rows = result.more_rows
+    self._more_results = result.more_results
     return result
+
+  def _GetRows(self, result):
+    """Returns a sequence of sequences containing the result set.
+
+    Args:
+      result: The client_pb2.ResultProto to process.
+
+    Returns:
+      A sequence of sequences, or an empty sequence when result set is empty.
+      Returns None if result set is not present.
+    """
+    if not result.rows.tuples:
+
+      return None
+    assert self._description, 'Column descriptions do not exist.'
+    column_names = [col[0] for col in self._description]
+    rows = []
+    for tuple_proto in result.rows.tuples:
+      row = []
+      nulls = set(tuple_proto.nulls)
+      value_index = 0
+      for i, column_descr in enumerate(self._description):
+        if i in nulls:
+          row.append(None)
+        else:
+          row.append(self._DecodeVariable(column_descr[1],
+                                          tuple_proto.values[value_index]))
+          value_index += 1
+      if self._use_dict_cursor:
+        assert len(column_names) == len(row)
+        row = dict(zip(column_names, row))
+      else:
+        row = tuple(row)
+      rows.append(row)
+    return rows
 
   def execute(self, statement, args=None):
     """Prepares and executes a database operation (query or command).
@@ -411,6 +552,7 @@ class Cursor(object):
       OperationalError: RPC problem.
     """
     self._CheckOpen()
+    self._Reset()
 
     request = sql_pb2.ExecRequest()
     request.options.include_generated_keys = True
@@ -422,6 +564,7 @@ class Cursor(object):
           statement, args, request.bind_variable.add)
     request.statement = _ConvertFormatToQmark(statement, args)
     self._DoExec(request)
+    self._executed = request.statement
 
   def executemany(self, statement, seq_of_args):
     """Prepares and executes a database operation for given parameter sequences.
@@ -437,6 +580,7 @@ class Cursor(object):
       OperationalError: RPC problem.
     """
     self._CheckOpen()
+    self._Reset()
 
     request = sql_pb2.ExecRequest()
     request.options.include_generated_keys = True
@@ -451,7 +595,82 @@ class Cursor(object):
           statement, args, bbv.bind_variable.add)
     request.statement = _ConvertFormatToQmark(statement, args)
     result = self._DoExec(request)
+    self._executed = request.statement
     self._rowcount = sum(result.batch_rows_updated)
+
+  def _FetchMoreRows(self):
+    """Fetches more rows from the server for a previously executed statement."""
+    request = sql_pb2.ExecRequest()
+    request.statement_id = self._statement_id
+    self._DoExec(request)
+
+  def callproc(self, procname, args=()):
+    """Calls a stored database procedure with the given name.
+
+    Args:
+      procname: A string, the name of the stored procedure.
+      args: A sequence of parameters to use with the procedure.
+
+    Returns:
+      A modified copy of the given input args. Input parameters are left
+      untouched, output and input/output parameters replaced with possibly new
+      values.
+
+    Raises:
+      InternalError: The cursor has been closed, or no statement has been
+        executed yet.
+      DatabaseError: A SQL exception occurred.
+      OperationalError: RPC problem.
+    """
+    self._CheckOpen()
+    self._Reset()
+
+    request = sql_pb2.ExecRequest()
+    request.statement_type = sql_pb2.ExecRequest.CALLABLE_STATEMENT
+    request.statement = 'CALL %s(%s)' % (procname, ','.join('?' * len(args)))
+
+
+
+
+    self._AddBindVariablesToRequest(
+        request.statement, args, request.bind_variable.add,
+        direction=client_pb2.BindVariableProto.INOUT)
+    result = self._DoExec(request)
+    self._executed = request.statement
+
+
+    return_args = list(args[:])
+    for var in result.output_variable:
+      return_args[var.position - 1] = self._DecodeVariable(var.type, var.value)
+    return tuple(return_args)
+
+  def nextset(self):
+    """Advance to the next result set.
+
+    Returns:
+      True if there was an available set to advance to, otherwise, None.
+
+    Raises:
+      InternalError: The cursor has been closed, or no statement has been
+        executed yet.
+      DatabaseError: A SQL exception occurred.
+      OperationalError: RPC problem.
+    """
+    self._CheckOpen()
+    self._CheckExecuted('nextset() called before execute')
+
+
+
+    self._rows = collections.deque()
+    self._rowcount = -1
+    if not self._more_results:
+      return None
+
+    request = sql_pb2.ExecOpRequest()
+    request.op.type = client_pb2.OpProto.NEXT_RESULT
+    request.op.statement_id = self._statement_id
+    self._HandleResult(self._conn.MakeRequest('ExecOp', request).result)
+    return True
 
   def fetchone(self):
     """Fetches the next row of a query result set.
@@ -464,8 +683,9 @@ class Cursor(object):
         executed yet.
     """
     self._CheckOpen()
-    if self._rowcount == -1:
-      raise InternalError('fetchone() called before execute')
+    self._CheckExecuted('fetchone() called before execute')
+    if not self._rows and self._more_rows:
+      self._FetchMoreRows()
     try:
       return self._rows.popleft()
     except IndexError:
@@ -486,12 +706,16 @@ class Cursor(object):
         executed yet.
     """
     self._CheckOpen()
-    if self._rowcount == -1:
-      raise InternalError('fetchmany() called before execute')
+    self._CheckExecuted('fetchmany() called before execute')
     if size is None:
       size = self.arraysize
+    while self._more_rows and size > len(self._rows):
+      self._FetchMoreRows()
+
     if size >= len(self._rows):
-      return self.fetchall()
+      rows = self._rows
+      self._rows = collections.deque()
+      return tuple(rows)
     else:
       result = []
       for _ in xrange(size):
@@ -510,8 +734,9 @@ class Cursor(object):
         executed yet.
     """
     self._CheckOpen()
-    if self._rowcount == -1:
-      raise InternalError('fetchall() called before execute')
+    self._CheckExecuted('fetchall() called before execute')
+    while self._more_rows:
+      self._FetchMoreRows()
     rows = self._rows
     self._rows = collections.deque()
     return tuple(rows)
@@ -528,6 +753,10 @@ class Cursor(object):
     self._conn.CheckOpen()
     if not self._open:
       raise InternalError('cursor has been closed')
+
+  def _CheckExecuted(self, msg):
+    if not self._executed:
+      raise InternalError(msg)
 
   def __iter__(self):
     return iter(self.fetchone, None)
@@ -714,8 +943,7 @@ class Connection(object):
 
     if (hasattr(response, 'sql_exception') and
         response.HasField('sql_exception')):
-      raise DatabaseError('%d: %s' % (response.sql_exception.code,
-                                      response.sql_exception.message))
+      raise _ToDbApiException(response.sql_exception)
     return response
 
   def _MakeRetriableRequest(self, stub_method, request):
@@ -738,11 +966,9 @@ class Connection(object):
     sql_exception = response.sql_exception
     if (sql_exception.application_error_code !=
         client_error_code_pb2.SqlServiceClientError.ERROR_TIMEOUT):
-      raise DatabaseError('%d: %s' % (sql_exception.code,
-                                      sql_exception.message))
+      raise _ToDbApiException(sql_exception)
     if time.clock() >= absolute_deadline_seconds:
-      raise DatabaseError('%d: %s' % (sql_exception.code,
-                                      sql_exception.message))
+      raise _ToDbApiException(sql_exception)
     return self._Retry(stub_method, request.request_id,
                        absolute_deadline_seconds)
 
@@ -784,8 +1010,7 @@ class Connection(object):
       sql_exception = response.sql_exception
       if (sql_exception.application_error_code !=
           client_error_code_pb2.SqlServiceClientError.ERROR_RESPONSE_PENDING):
-        raise DatabaseError('%d: %s' % (response.sql_exception.code,
-                                        response.sql_exception.message))
+        raise _ToDbApiException(response.sql_exception)
 
   def _ConvertCachedResponse(self, stub_method, exec_op_response):
     """Converts the cached response or RPC error.
@@ -819,11 +1044,10 @@ class Connection(object):
       raise InternalError('Found unexpected stub_method: %s' % (stub_method))
     response.ParseFromString(exec_op_response.cached_payload)
     if response.HasField('sql_exception'):
-      raise DatabaseError('%d: %s' % (response.sql_exception.code,
-                                      response.sql_exception.message))
+      raise _ToDbApiException(response.sql_exception)
     return response
 
-  def MakeRequestImpl(self, stub_method, request):
+  def MakeRequestImpl(self, unused_stub_method, unused_request):
     raise InternalError('No transport defined. Try using rdbms_[transport]')
 
   def get_server_info(self):

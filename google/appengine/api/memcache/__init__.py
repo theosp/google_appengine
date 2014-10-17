@@ -326,10 +326,7 @@ class Client(object):
                pload=None,
                pid=None,
                make_sync_call=None,
-               _app_id=None,
-               _num_memcacheg_backends=None,
-               _ignore_shardlock=None,
-               _memcache_pool_hint=None):
+               _app_id=None):
     """Create a new Client object.
 
     No parameters are required.
@@ -349,27 +346,13 @@ class Client(object):
 
 
 
-
-
-
-
-
-
-
-
     self._pickler_factory = pickler
     self._unpickler_factory = unpickler
     self._pickle_protocol = pickleProtocol
     self._persistent_id = pid
     self._persistent_load = pload
     self._app_id = _app_id
-    self._num_memcacheg_backends = _num_memcacheg_backends
-    self._ignore_shardlock = _ignore_shardlock
-    self._memcache_pool_hint = _memcache_pool_hint
     self._cas_ids = {}
-    if _app_id and not(_num_memcacheg_backends and _memcache_pool_hint):
-      raise ValueError('If you specify an _app_id, you must also provide '
-                       '_num_memcacheg_backends and _memcache_pool_hint')
 
   def cas_reset(self):
     """Clear the remembered CAS ids."""
@@ -426,10 +409,6 @@ class Client(object):
     if self._app_id:
       app_override = message.mutable_override()
       app_override.set_app_id(self._app_id)
-      app_override.set_num_memcacheg_backends(self._num_memcacheg_backends)
-      if self._ignore_shardlock:
-        app_override.set_ignore_shardlock(self._ignore_shardlock)
-      app_override.set_memcache_pool_hint(self._memcache_pool_hint)
 
   def set_servers(self, servers):
     """Sets the pool of memcache servers used by the client.

@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-
-
 """Helper CGI for OAuth in the development app server."""
 
 
@@ -217,9 +213,9 @@ def CreateOAuthDispatcher():
 
 
 
-  from google.appengine.tools import dev_appserver
+  from google.appengine.tools import old_dev_appserver
 
-  class OAuthDispatcher(dev_appserver.URLDispatcher):
+  class OAuthDispatcher(old_dev_appserver.URLDispatcher):
     """Dispatcher that handles requests to the built-in OAuth handlers."""
 
     def Dispatch(self,
@@ -254,7 +250,7 @@ def CreateOAuthDispatcher():
         body or query string (in the form of {key :[value1, value2]}).
       """
       method = base_env_dict['REQUEST_METHOD']
-      path, query = dev_appserver.SplitURL(request.relative_url)
+      path, query = old_dev_appserver.SplitURL(request.relative_url)
       parameters = {}
       if method == 'POST':
         form = cgi.FieldStorage(fp=request.infile,

@@ -39,13 +39,13 @@ class Message(object):
   compiler.  These generated types subclass Message and implement the methods
   shown below.
 
-  TODO(robinson): Link to an HTML document here.
+  TODO: Link to an HTML document here.
 
-  TODO(robinson): Document that instances of this class will also
+  TODO: Document that instances of this class will also
   have an Extensions attribute with __getitem__ and __setitem__.
   Again, not sure how to best convey this.
 
-  TODO(robinson): Document that the class must also have a static
+  TODO: Document that the class must also have a static
     RegisterExtension(extension_field) method.
     Not sure how to best express at this point.
   """
@@ -145,13 +145,13 @@ class Message(object):
       - Else, (it's a nonrepeated composite), we recursively merge
         into the existing composite.
 
-    TODO(robinson): Document handling of unknown fields.
+    TODO: Document handling of unknown fields.
 
     Args:
       serialized: Any object that allows us to call buffer(serialized)
         to access a string of bytes using the buffer interface.
 
-    TODO(robinson): When we switch to a helper, this will return None.
+    TODO: When we switch to a helper, this will return None.
 
     Returns:
       The number of bytes read from |serialized|.
@@ -166,7 +166,11 @@ class Message(object):
     raise NotImplementedError
 
   def ParseFromString(self, serialized):
-    """Like MergeFromString(), except we clear the object first."""
+    """Parse serialized protocol buffer data into this message.
+
+    Like MergeFromString(), except we clear the object first and
+    do not return the value that MergeFromString returns.
+    """
     self.Clear()
     self.MergeFromString(serialized)
 
@@ -218,12 +222,21 @@ class Message(object):
     raise NotImplementedError
 
   def HasField(self, field_name):
-    """Checks if a certain field is set for the message. Note if the
-    field_name is not defined in the message descriptor, ValueError will be
-    raised."""
+    """Checks if a certain field is set for the message, or if any field inside
+    a oneof group is set.  Note that if the field_name is not defined in the
+    message descriptor, ValueError will be raised."""
     raise NotImplementedError
 
   def ClearField(self, field_name):
+    """Clears the contents of a given field, or the field set inside a oneof
+    group.  If the name neither refers to a defined field or oneof group,
+    ValueError is raised."""
+    raise NotImplementedError
+
+  def WhichOneof(self, oneof_group):
+    """Returns the name of the field that is set inside a oneof group, or
+    None if no field is set.  If no group with the given name exists, ValueError
+    will be raised."""
     raise NotImplementedError
 
   def HasExtension(self, extension_handle):

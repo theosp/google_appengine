@@ -39,6 +39,8 @@ __all__ = ['BackendDeadlineExceeded',
            'BlobSizeTooLarge',
            'InternalError',
            'InvalidScope',
+           'NotAllowed',
+           'OperationNotImplemented',
            'Error',
            'create_rpc',
            'make_sign_blob_call',
@@ -53,6 +55,8 @@ __all__ = ['BackendDeadlineExceeded',
            'get_access_token',
            'get_access_token_uncached',
            'make_get_access_token_call',
+           'get_default_gcs_bucket_name',
+           'make_get_default_gcs_bucket_name_call',
           ]
 
 
@@ -60,6 +64,7 @@ _APP_IDENTITY_SERVICE_NAME = 'app_identity_service'
 _SIGN_FOR_APP_METHOD_NAME = 'SignForApp'
 _GET_CERTS_METHOD_NAME = 'GetPublicCertificatesForApp'
 _GET_SERVICE_ACCOUNT_NAME_METHOD_NAME = 'GetServiceAccountName'
+_GET_DEFAULT_GCS_BUCKET_NAME_METHOD_NAME = 'GetDefaultGcsBucketName'
 _GET_ACCESS_TOKEN_METHOD_NAME = 'GetAccessToken'
 _PARTITION_SEPARATOR = '~'
 _DOMAIN_SEPARATOR = ':'
@@ -87,6 +92,14 @@ class InvalidScope(Error):
   """Invalid scope."""
 
 
+class NotAllowed(Error):
+  """The operation is not allowed."""
+
+
+class OperationNotImplemented(Error):
+  """The operation is not implemented for the service account."""
+
+
 def _to_app_identity_error(error):
   """Translate an application error to an external Error, if possible.
 
@@ -107,6 +120,10 @@ def _to_app_identity_error(error):
       InternalError,
       app_identity_service_pb.AppIdentityServiceError.UNKNOWN_SCOPE:
       InvalidScope,
+      app_identity_service_pb.AppIdentityServiceError.NOT_ALLOWED:
+      NotAllowed,
+      app_identity_service_pb.AppIdentityServiceError.NOT_IMPLEMENTED:
+      OperationNotImplemented,
       }
   if error.application_error in error_map:
     return error_map[error.application_error](error.error_detail)
@@ -271,6 +288,51 @@ def make_get_service_account_name_call(rpc):
                 response, get_service_account_name_result)
 
 
+def make_get_default_gcs_bucket_name_call(rpc):
+  """Get default google storage bucket name for the app.
+
+  Args:
+    rpc: A UserRPC object.
+
+  Returns:
+    Default Google Storage Bucket name of the app.
+  """
+  request = app_identity_service_pb.GetDefaultGcsBucketNameRequest()
+  response = app_identity_service_pb.GetDefaultGcsBucketNameResponse()
+
+  if rpc.deadline is not None:
+    request.set_deadline(rpc.deadline)
+
+  def get_default_gcs_bucket_name_result(rpc):
+    """Check success, handle exceptions, and return converted RPC result.
+
+    This method waits for the RPC if it has not yet finished, and calls the
+    post-call hooks on the first invocation.
+
+    Args:
+      rpc: A UserRPC object.
+
+    Returns:
+      A string which is the name of the app's default google storage bucket.
+    """
+    assert rpc.service == _APP_IDENTITY_SERVICE_NAME, repr(rpc.service)
+    assert rpc.method == _GET_DEFAULT_GCS_BUCKET_NAME_METHOD_NAME, (
+        repr(rpc.method))
+    try:
+      rpc.check_success()
+    except apiproxy_errors.ApplicationError, err:
+      raise _to_app_identity_error(err)
+
+    if response.has_default_gcs_bucket_name():
+      return response.default_gcs_bucket_name()
+    else:
+      return None
+
+
+  rpc.make_call(_GET_DEFAULT_GCS_BUCKET_NAME_METHOD_NAME, request,
+                response, get_default_gcs_bucket_name_result)
+
+
 def sign_blob(bytes_to_sign, deadline=None):
   """Signs a blob.
 
@@ -316,6 +378,22 @@ def get_service_account_name(deadline=None):
   """
   rpc = create_rpc(deadline)
   make_get_service_account_name_call(rpc)
+  rpc.wait()
+  return rpc.get_result()
+
+
+def get_default_gcs_bucket_name(deadline=None):
+  """Gets the default gs bucket name for the app.
+
+  Args:
+    deadline: Optional deadline in seconds for the operation; the default
+      is a system-specific deadline (typically 5 seconds).
+
+  Returns:
+    Default bucket name for the app.
+  """
+  rpc = create_rpc(deadline)
+  make_get_default_gcs_bucket_name_call(rpc)
   rpc.wait()
   return rpc.get_result()
 
@@ -395,7 +473,13 @@ def make_get_access_token_call(rpc, scopes, service_account_id=None):
     for scope in scopes:
       request.add_scope(scope)
   if service_account_id:
-    request.set_service_account_id(service_account_id)
+    if isinstance(service_account_id, (int, long)):
+      request.set_service_account_id(service_account_id)
+    elif isinstance(service_account_id, basestring):
+      request.set_service_account_name(service_account_id)
+    else:
+      raise TypeError()
+
   response = app_identity_service_pb.GetAccessTokenResponse()
 
   def get_access_token_result(rpc):
@@ -466,7 +550,7 @@ def get_access_token(scopes, service_account_id=None):
 
   memcache_key = _MEMCACHE_KEY_PREFIX + str(scopes)
   if service_account_id:
-    memcache_key += ',%d' % service_account_id
+    memcache_key += ',%s' % service_account_id
   memcache_value = memcache.get(memcache_key, namespace=_MEMCACHE_NAMESPACE)
   if memcache_value:
     access_token, expires_at = memcache_value

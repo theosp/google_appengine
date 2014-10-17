@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
 """This module adds support for multiple processes in the dev_appserver.
 
 Each instance of the application is started as a separate process on a unique
@@ -68,6 +66,7 @@ ARG_MULTIPROCESS_API_SERVER = 'multiprocess_api_server'
 ARG_MULTIPROCESS_APP_INSTANCE_ID = 'multiprocess_app_instance'
 ARG_MULTIPROCESS_BACKEND_ID = 'multiprocess_backend_id'
 ARG_MULTIPROCESS_BACKEND_INSTANCE_ID = 'multiprocess_backend_instance_id'
+ARG_MULTIPROCESS_FRONTEND_PORT = 'multiprocess_frontend_port'
 
 
 
@@ -106,7 +105,8 @@ class ChildProcess(object):
                port,
                app_instance=None,
                backend_id=None,
-               instance_id=None):
+               instance_id=None,
+               frontend_port=None):
     """Creates an object representing a child process.
 
     Only one of the given args should be provided (except for instance_id when
@@ -116,6 +116,7 @@ class ChildProcess(object):
       app_instance: (int) The process represents the indicated app instance.
       backend_id: (string) The process represents a backend.
       instance_id: (int) The process represents the given backend instance.
+      frontend_port: (int) for backends, the frontend port.
     """
 
     self.app_instance = app_instance
@@ -126,6 +127,7 @@ class ChildProcess(object):
     self.started = False
     self.connection_handler = httplib.HTTPConnection
     self.SetHostPort(host, port)
+    self.frontend_port = frontend_port
 
   def __str__(self):
     if self.app_instance is not None:
@@ -172,6 +174,8 @@ class ChildProcess(object):
     self.SetFlag('--address', short_flag='-a', value=self.host)
     self.SetFlag('--port', short_flag='-p', value=self.port)
     self.SetFlag('--multiprocess_api_port', value=self.api_port)
+    if self.frontend_port is not None:
+      self.SetFlag('--multiprocess_frontend_port', value=self.frontend_port)
 
     if self.app_instance is not None:
       self.SetFlag('--multiprocess_app_instance_id', value=0)
@@ -460,6 +464,7 @@ class DevProcess(object):
 
 
     base_port = self.multiprocess_min_port
+    self.frontend_port = base_port
     next_port = base_port
     self.child_app_instance = ChildProcess(self.host, next_port,
                                            app_instance=0)
@@ -475,7 +480,8 @@ class DevProcess(object):
       for i in xrange(backend.instances):
         self.children.append(ChildProcess(self.host, next_port,
                                           backend_id=backend.name,
-                                          instance_id=i))
+                                          instance_id=i,
+                                          frontend_port=self.frontend_port))
         next_port += 1
 
 
@@ -497,6 +503,7 @@ class DevProcess(object):
         application_host=options['address'],
         application_port=options['port'],
         application_root=options['root_path'],
+        auto_id_policy=options['auto_id_policy'],
         blobstore_path=options['blobstore_path'],
         clear_datastore=options['clear_datastore'],
         clear_prospective_search=options['clear_prospective_search'],
@@ -504,7 +511,7 @@ class DevProcess(object):
         enable_sendmail=options['enable_sendmail'],
         enable_task_running=not options['disable_task_running'],
         high_replication=options['high_replication'],
-        persist_logs=options['persist_logs'],
+        logs_path=options['logs_path'],
         prospective_search_path=options['prospective_search_path'],
         require_indexes=options['require_indexes'],
         show_mail_body=options['show_mail_body'],
@@ -671,7 +678,6 @@ class DevProcess(object):
     services = (
         'app_identity_service',
         'capability_service',
-        'conversion',
         'datastore_v3',
         'mail',
         'memcache',

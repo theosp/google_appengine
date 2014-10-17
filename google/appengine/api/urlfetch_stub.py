@@ -53,7 +53,7 @@ from google.appengine.runtime import apiproxy_errors
 
 
 
-MAX_REQUEST_SIZE = 5 << 20
+MAX_REQUEST_SIZE = 10 << 20
 
 MAX_RESPONSE_SIZE = 2 ** 25
 
@@ -75,7 +75,7 @@ _API_CALL_DEADLINE = 5.0
 
 
 
-_API_CALL_VALIDATE_CERTIFICATE_DEFAULT = True
+_API_CALL_VALIDATE_CERTIFICATE_DEFAULT = False
 
 
 _CONNECTION_SUPPORTS_TIMEOUT = sys.version_info >= (2, 6)
@@ -142,14 +142,25 @@ def _IsAllowedPort(port):
 class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
   """Stub version of the urlfetch API to be used with apiproxy_stub_map."""
 
-  def __init__(self, service_name='urlfetch'):
+  THREADSAFE = True
+
+  def __init__(self,
+               service_name='urlfetch',
+               urlmatchers_to_fetch_functions=None):
     """Initializer.
 
     Args:
       service_name: Service name expected for all calls.
+      urlmatchers_to_fetch_functions: A list of two-element tuples.
+        The first element is a urlmatcher predicate function that takes
+        a url and determines a match. The second is a function that
+        can retrieve result for that url. If no match is found, a url is
+        handled by the default _RetrieveURL function.
+        When more than one match is possible, the first match is used.
     """
     super(URLFetchServiceStub, self).__init__(service_name,
                                               max_request_size=MAX_REQUEST_SIZE)
+    self._urlmatchers_to_fetch_functions = urlmatchers_to_fetch_functions or []
 
   def _Dynamic_Fetch(self, request, response):
     """Trivial implementation of URLFetchService::Fetch().
@@ -180,10 +191,13 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
       payload = request.payload()
     elif request.method() == urlfetch_service_pb.URLFetchRequest.DELETE:
       method = 'DELETE'
+    elif request.method() == urlfetch_service_pb.URLFetchRequest.PATCH:
+      method = 'PATCH'
+      payload = request.payload()
     else:
       logging.error('Invalid method: %s', request.method())
       raise apiproxy_errors.ApplicationError(
-        urlfetch_service_pb.URLFetchServiceError.UNSPECIFIED_ERROR)
+        urlfetch_service_pb.URLFetchServiceError.INVALID_URL)
 
     if not (protocol == 'http' or protocol == 'https'):
       logging.error('Invalid protocol: %s', protocol)
@@ -192,10 +206,8 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
 
     if not host:
       logging.error('Missing host.')
-
-
       raise apiproxy_errors.ApplicationError(
-          urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR)
+          urlfetch_service_pb.URLFetchServiceError.INVALID_URL)
 
     self._SanitizeHttpHeaders(_UNTRUSTED_REQUEST_HEADERS,
                               request.header_list())
@@ -206,16 +218,32 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
     if request.has_mustvalidateservercertificate():
       validate_certificate = request.mustvalidateservercertificate()
 
-    self._RetrieveURL(request.url(), payload, method,
-                      request.header_list(), request, response,
-                      follow_redirects=request.followredirects(),
-                      deadline=deadline,
-                      validate_certificate=validate_certificate)
+    fetch_function = self._GetFetchFunction(request.url())
+    fetch_function(request.url(), payload, method,
+                   request.header_list(), request, response,
+                   follow_redirects=request.followredirects(),
+                   deadline=deadline,
+                   validate_certificate=validate_certificate)
 
-  def _RetrieveURL(self, url, payload, method, headers, request, response,
+  def _GetFetchFunction(self, url):
+    """Get the fetch function for a url.
+
+    Args:
+      url: A url to fetch from. str.
+
+    Returns:
+      A fetch function for this url.
+    """
+    for urlmatcher, fetch_function in self._urlmatchers_to_fetch_functions:
+      if urlmatcher(url):
+        return fetch_function
+    return self._RetrieveURL
+
+  @staticmethod
+  def _RetrieveURL(url, payload, method, headers, request, response,
                    follow_redirects=True, deadline=_API_CALL_DEADLINE,
                    validate_certificate=_API_CALL_VALIDATE_CERTIFICATE_DEFAULT):
-    """Retrieves a URL.
+    """Retrieves a URL over network.
 
     Args:
       url: String containing the URL to access.
@@ -223,8 +251,10 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
         If the payload is unicode, we assume it is utf-8.
       method: HTTP method to use (e.g., 'GET')
       headers: List of additional header objects to use for the request.
-      request: Request object from original request.
-      response: Response object to populate with the response data.
+      request: A urlfetch_service_pb.URLFetchRequest proto object from
+          original request.
+      response: A urlfetch_service_pb.URLFetchResponse proto object to
+          populate with the response data.
       follow_redirects: optional setting (defaulting to True) for whether or not
         we should transparently follow redirects (up to MAX_REDIRECTS)
       deadline: Number of seconds to wait for the urlfetch to finish.
@@ -233,11 +263,12 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
         the certificate.
 
     Raises:
-      Raises an apiproxy_errors.ApplicationError exception with FETCH_ERROR
-      in cases where:
-        - MAX_REDIRECTS is exceeded
+      Raises an apiproxy_errors.ApplicationError exception with
+      INVALID_URL_ERROR in cases where:
         - The protocol of the redirected URL is bad or missing.
         - The port is not in the allowable range of ports.
+      Raises an apiproxy_errors.ApplicationError exception with
+      TOO_MANY_REDIRECTS in cases when MAX_REDIRECTS is exceeded
     """
     last_protocol = ''
     last_host = ''
@@ -266,13 +297,13 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
 
 
         raise apiproxy_errors.ApplicationError(
-          urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR)
+          urlfetch_service_pb.URLFetchServiceError.INVALID_URL)
 
       if protocol and not host:
 
         logging.error('Missing host on redirect; target url is %s' % url)
         raise apiproxy_errors.ApplicationError(
-          urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR)
+          urlfetch_service_pb.URLFetchServiceError.INVALID_URL)
 
 
 
@@ -296,6 +327,8 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
 
 
         adjusted_headers['Content-Length'] = str(len(payload))
+
+
       if method == 'POST' and payload:
         adjusted_headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
@@ -333,7 +366,7 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
           error_msg = 'Redirect specified invalid protocol: "%s"' % protocol
           logging.error(error_msg)
           raise apiproxy_errors.ApplicationError(
-              urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR, error_msg)
+              urlfetch_service_pb.URLFetchServiceError.INVALID_URL, error_msg)
 
 
 
@@ -372,11 +405,21 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
           if not _CONNECTION_SUPPORTS_TIMEOUT:
             socket.setdefaulttimeout(orig_timeout)
           connection.close()
-      except (_fancy_urllib_InvalidCertException,
-              _fancy_urllib_SSLError), e:
+      except _fancy_urllib_InvalidCertException, e:
         raise apiproxy_errors.ApplicationError(
           urlfetch_service_pb.URLFetchServiceError.SSL_CERTIFICATE_ERROR,
           str(e))
+      except _fancy_urllib_SSLError, e:
+
+
+
+
+
+        app_error = (
+            urlfetch_service_pb.URLFetchServiceError.DEADLINE_EXCEEDED
+            if 'timed out' in e.message else
+            urlfetch_service_pb.URLFetchServiceError.SSL_CERTIFICATE_ERROR)
+        raise apiproxy_errors.ApplicationError(app_error, str(e))
       except socket.timeout, e:
         raise apiproxy_errors.ApplicationError(
           urlfetch_service_pb.URLFetchServiceError.DEADLINE_EXCEEDED, str(e))
@@ -394,7 +437,8 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
           error_msg = 'Redirecting response was missing "Location" header'
           logging.error(error_msg)
           raise apiproxy_errors.ApplicationError(
-              urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR, error_msg)
+              urlfetch_service_pb.URLFetchServiceError.MALFORMED_REPLY,
+              error_msg)
       else:
         response.set_statuscode(http_response.status)
         if (http_response.getheader('content-encoding') == 'gzip' and
@@ -431,7 +475,8 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
       error_msg = 'Too many repeated redirects'
       logging.error(error_msg)
       raise apiproxy_errors.ApplicationError(
-          urlfetch_service_pb.URLFetchServiceError.FETCH_ERROR, error_msg)
+          urlfetch_service_pb.URLFetchServiceError.TOO_MANY_REDIRECTS,
+          error_msg)
 
   def _SanitizeHttpHeaders(self, untrusted_headers, headers):
     """Cleans "unsafe" headers from the HTTP request, in place.

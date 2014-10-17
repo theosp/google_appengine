@@ -55,12 +55,14 @@ __all__ = ['Batch',
           ]
 
 import base64
-import pickle
 import collections
+import pickle
 
 from google.appengine.datastore import entity_pb
+
 from google.appengine.api import datastore_errors
 from google.appengine.api import datastore_types
+from google.appengine.api.search import geo_util
 from google.appengine.datastore import datastore_index
 from google.appengine.datastore import datastore_pb
 from google.appengine.datastore import datastore_rpc
@@ -887,6 +889,120 @@ class _DedupingFilter(_IgnoreFilter):
     return False
 
 
+class _BoundingCircleFilter(_SinglePropertyFilter):
+  """An immutable bounding circle filter for geo locations.
+
+  An immutable filter predicate that constrains a geo location property to a
+  bounding circle region. The filter is inclusive at the border. The property
+  has to be of type V3 PointValue. V4 GeoPoints converts to this type.
+  """
+
+
+
+
+
+
+  def __init__(self, property_name, latitude, longitude, radius_meters):
+    self._property_name = property_name
+    self._lat_lng = geo_util.LatLng(latitude, longitude)
+    self._radius_meters = radius_meters
+
+    if not radius_meters >= 0:
+      raise datastore_errors.BadArgumentError(
+          'invalid radius: %r' % radius_meters)
+
+  @classmethod
+  def _from_v4_pb(cls, bounding_circle_v4_pb):
+    return _BoundingCircleFilter(bounding_circle_v4_pb.property().name(),
+                                 bounding_circle_v4_pb.center().latitude(),
+                                 bounding_circle_v4_pb.center().longitude(),
+                                 bounding_circle_v4_pb.radius_meters())
+
+  def _get_prop_name(self):
+    return self._property_name
+
+  def _apply_to_value(self, value):
+
+
+
+    if value[0] != entity_pb.PropertyValue.kPointValueGroup:
+      return False
+
+    _, latitude, longitude = value
+
+    lat_lng = geo_util.LatLng(latitude, longitude)
+
+
+    return self._lat_lng - lat_lng <= self._radius_meters
+
+
+class _BoundingBoxFilter(_SinglePropertyFilter):
+  """An immutable bounding box filter for geo locations.
+
+  An immutable filter predicate that constrains a geo location property to a
+  bounding box region. The filter is inclusive at the border. The property
+  has to be of type V3 PointValue. V4 GeoPoints converts to this type.
+  """
+
+
+
+  def __init__(self, property_name, southwest, northeast):
+    """Initializes a _BoundingBoxFilter.
+
+    Args:
+      property_name: the name of the property to filter on.
+      southwest: The south-west corner of the bounding box. The type is
+          datastore_types.GeoPt.
+      northeast: The north-east corner of the bounding box. The type is
+          datastore_types.GeoPt.
+
+    Raises:
+      datastore_errors.BadArgumentError if the south-west coordinate is on top
+      of the north-east coordinate.
+    """
+
+
+    if southwest.lat > northeast.lat:
+      raise datastore_errors.BadArgumentError(
+          'the south-west coordinate is on top of the north-east coordinate')
+
+    self._property_name = property_name
+    self._southwest = southwest
+    self._northeast = northeast
+
+  @classmethod
+  def _from_v4_pb(cls, bounding_box_v4_pb):
+    sw = datastore_types.GeoPt(bounding_box_v4_pb.southwest().latitude(),
+                               bounding_box_v4_pb.southwest().longitude())
+    ne = datastore_types.GeoPt(bounding_box_v4_pb.northeast().latitude(),
+                               bounding_box_v4_pb.northeast().longitude())
+    return _BoundingBoxFilter(bounding_box_v4_pb.property().name(), sw, ne)
+
+  def _get_prop_name(self):
+    return self._property_name
+
+  def _apply_to_value(self, value):
+
+
+
+    if value[0] != entity_pb.PropertyValue.kPointValueGroup:
+      return False
+
+    _, latitude, longitude = value
+
+
+
+    if not self._southwest.lat <= latitude <= self._northeast.lat:
+      return False
+
+
+    if self._southwest.lon > self._northeast.lon:
+      return (longitude <= self._northeast.lon
+              or longitude >= self._southwest.lon)
+    else:
+      return self._southwest.lon <= longitude <= self._northeast.lon
+
+
 class Order(_PropertyComponent):
   """A base class that represents a sort order on a query.
 
@@ -898,8 +1014,20 @@ class Order(_PropertyComponent):
   always used.
   """
 
-  def reversed(self):
+  @datastore_rpc._positional(1)
+  def reversed(self, group_by=None):
     """Constructs an order representing the reverse of the current order.
+
+    This function takes into account the effects of orders on properties not in
+    the group_by clause of a query. For example, consider:
+      SELECT A, First(B) ... GROUP BY A ORDER BY A, B
+    Changing the order of B would effect which value is listed in the 'First(B)'
+    column which would actually change the results instead of just reversing
+    them.
+
+    Args:
+      group_by: If specified, only orders on properties in group_by will be
+        reversed.
 
     Returns:
       A new order representing the reverse direction.
@@ -985,6 +1113,8 @@ class Order(_PropertyComponent):
     if result:
       return result
 
+    if not lhs.has_key() and not rhs.has_key():
+      return 0
 
 
 
@@ -1064,7 +1194,11 @@ class PropertyOrder(Order):
     name = repr(name).encode('utf-8')[1:-1]
     return '%s(<%s>%s)' % (self.__class__.__name__, name, extra)
 
-  def reversed(self):
+  @datastore_rpc._positional(1)
+  def reversed(self, group_by=None):
+    if group_by and self.__order.property() not in group_by:
+      return self
+
     if self.__order.direction() == self.ASCENDING:
       return PropertyOrder(self.__order.property().decode('utf-8'),
                            self.DESCENDING)
@@ -1089,6 +1223,9 @@ class PropertyOrder(Order):
   def _cmp(self, lhs_value_map, rhs_value_map):
     lhs_values = lhs_value_map[self.__order.property()]
     rhs_values = rhs_value_map[self.__order.property()]
+
+    if not lhs_values and not rhs_values:
+      return 0
 
     if not lhs_values:
       raise datastore_errors.BadArgumentError(
@@ -1158,8 +1295,10 @@ class CompositeOrder(Order):
   def __repr__(self):
     return '%s(%r)' % (self.__class__.__name__, list(self.orders))
 
-  def reversed(self):
-    return CompositeOrder([order.reversed() for order in self._orders])
+  @datastore_rpc._positional(1)
+  def reversed(self, group_by=None):
+    return CompositeOrder([order.reversed(group_by=group_by)
+                           for order in self._orders])
 
   def _get_prop_names(self):
     names = set()
@@ -1265,6 +1404,11 @@ class FetchOptions(datastore_rpc.Configuration):
 class QueryOptions(FetchOptions):
   """An immutable class that contains all options for running a query.
 
+  This class contains options that control execution process (deadline,
+  batch_size, read_policy, etc) and what part of the query results are returned
+  (keys_only, projection, offset, limit, etc) Options that control the contents
+  of the query results are specified on the datastore_query.Query directly.
+
   This class reserves the right to define configuration options of any name
   except those that start with 'user_'. External subclasses should only define
   function or variables with names that start with in 'user_'.
@@ -1323,14 +1467,14 @@ class QueryOptions(FetchOptions):
       value = tuple(value)
     elif not isinstance(value, tuple):
       raise datastore_errors.BadArgumentError(
-          'properties argument should be a list or tuple (%r)' % (value,))
+          'projection argument should be a list or tuple (%r)' % (value,))
     if not value:
       raise datastore_errors.BadArgumentError(
-          'properties argument cannot be empty')
+          'projection argument cannot be empty')
     for prop in value:
       if not isinstance(prop, basestring):
         raise datastore_errors.BadArgumentError(
-            'properties argument should contain only strings (%r)' % (prop,))
+            'projection argument should contain only strings (%r)' % (prop,))
 
     return value
 
@@ -1417,7 +1561,7 @@ class Cursor(_BaseComponent):
   """
 
   @datastore_rpc._positional(1)
-  def __init__(self, _cursor_pb=None, urlsafe=None):
+  def __init__(self, _cursor_pb=None, urlsafe=None, _cursor_bytes=None):
     """Constructor.
 
     A Cursor constructed with no arguments points the first result of any
@@ -1427,19 +1571,27 @@ class Cursor(_BaseComponent):
 
 
     super(Cursor, self).__init__()
+    if ((urlsafe is not None) + (_cursor_pb is not None)
+        + (_cursor_bytes is not None) > 1):
+      raise datastore_errors.BadArgumentError(
+          'Can only specify one of _cursor_pb, urlsafe, and _cursor_bytes')
     if urlsafe is not None:
-      if _cursor_pb is not None:
-        raise datastore_errors.BadArgumentError(
-            'Do not use _cursor_pb and urlsafe together')
-      _cursor_pb = self._bytes_to_cursor_pb(self._urlsafe_to_bytes(urlsafe))
+      _cursor_bytes = self._urlsafe_to_bytes(urlsafe)
     if _cursor_pb is not None:
       if not isinstance(_cursor_pb, datastore_pb.CompiledCursor):
         raise datastore_errors.BadArgumentError(
             '_cursor_pb argument should be datastore_pb.CompiledCursor (%r)' %
             (_cursor_pb,))
-      self.__compiled_cursor = _cursor_pb
+      _cursor_bytes = _cursor_pb.Encode()
+    if _cursor_bytes is not None:
+      if _cursor_pb is None and urlsafe is None:
+
+
+
+        Cursor._bytes_to_cursor_pb(_cursor_bytes)
+      self.__cursor_bytes = _cursor_bytes
     else:
-      self.__compiled_cursor = datastore_pb.CompiledCursor()
+      self.__cursor_bytes = ''
 
   def __repr__(self):
     arg = self.to_websafe_string()
@@ -1447,21 +1599,20 @@ class Cursor(_BaseComponent):
       arg = '<%s>' % arg
     return '%s(%s)' % (self.__class__.__name__, arg)
 
+
   def reversed(self):
     """Creates a cursor for use in a query with a reversed sort order."""
-    for pos in self.__compiled_cursor.position_list():
+    compiled_cursor = self._to_pb()
+    if compiled_cursor.has_position():
+      pos = compiled_cursor.position()
       if pos.has_start_key():
         raise datastore_errors.BadRequestError('Cursor cannot be reversed.')
-
-    rev_pb = datastore_pb.CompiledCursor()
-    rev_pb.CopyFrom(self.__compiled_cursor)
-    for pos in rev_pb.position_list():
       pos.set_start_inclusive(not pos.start_inclusive())
-    return Cursor(_cursor_pb=rev_pb)
+    return Cursor(_cursor_pb=compiled_cursor)
 
   def to_bytes(self):
     """Serialize cursor as a byte string."""
-    return self.__compiled_cursor.Encode()
+    return self.__cursor_bytes
 
   @staticmethod
   def from_bytes(cursor):
@@ -1480,8 +1631,8 @@ class Cursor(_BaseComponent):
       datastore_errors.BadValueError if the cursor argument does not represent a
       serialized cursor.
     """
-    cursor_pb = Cursor._bytes_to_cursor_pb(cursor)
-    return Cursor(_cursor_pb=cursor_pb)
+    return Cursor(_cursor_bytes=cursor)
+
 
   @staticmethod
   def _bytes_to_cursor_pb(cursor):
@@ -1576,11 +1727,20 @@ class Cursor(_BaseComponent):
 
     query_options = QueryOptions(
         start_cursor=self, offset=offset, limit=0, produce_cursors=True)
-    return query.run(conn, query_options).next_batch(0).cursor(0)
+    return query.run(conn, query_options).next_batch(
+        Batcher.AT_LEAST_OFFSET).cursor(0)
+
 
   def _to_pb(self):
     """Returns the internal only pb representation."""
-    return self.__compiled_cursor
+    return Cursor._bytes_to_cursor_pb(self.__cursor_bytes)
+
+  def __setstate__(self, state):
+    if '_Cursor__compiled_cursor' in state:
+
+      self.__cursor_bytes = state['_Cursor__compiled_cursor'].Encode()
+    else:
+      self.__dict__ = state
 
 
 class _QueryKeyFilter(_BaseComponent):
@@ -1741,13 +1901,13 @@ class Query(_BaseQuery):
   """An immutable class that represents a query signature.
 
   A query signature consists of a source of entities (specified as app,
-  namespace and optionally kind and ancestor) as well as a FilterPredicate
-  and a desired ordering.
+  namespace and optionally kind and ancestor) as well as a FilterPredicate,
+  grouping and a desired ordering.
   """
 
   @datastore_rpc._positional(1)
   def __init__(self, app=None, namespace=None, kind=None, ancestor=None,
-               filter_predicate=None, order=None):
+               filter_predicate=None, group_by=None, order=None):
     """Constructor.
 
     Args:
@@ -1758,17 +1918,21 @@ class Query(_BaseQuery):
       ancestor: Optional ancestor to query, an entity_pb.Reference.
       filter_predicate: Optional FilterPredicate by which to restrict the query.
       order: Optional Order in which to return results.
+      group_by: Optional list of properties to group the results by.
 
     Raises:
       datastore_errors.BadArgumentError if any argument is invalid.
     """
+    super(Query, self).__init__()
+
+
     if filter_predicate is not None and not isinstance(filter_predicate,
                                                        FilterPredicate):
       raise datastore_errors.BadArgumentError(
           'filter_predicate should be datastore_query.FilterPredicate (%r)' %
-          (ancestor,))
+          (filter_predicate,))
 
-    super(Query, self).__init__()
+
     if isinstance(order, CompositeOrder):
       if order.size() == 0:
         order = None
@@ -1778,10 +1942,26 @@ class Query(_BaseQuery):
       raise datastore_errors.BadArgumentError(
           'order should be Order (%r)' % (order,))
 
+
+    if group_by is not None:
+      if isinstance(group_by, list):
+        group_by = tuple(group_by)
+      elif not isinstance(group_by, tuple):
+        raise datastore_errors.BadArgumentError(
+            'group_by argument should be a list or tuple (%r)' % (group_by,))
+      if not group_by:
+        raise datastore_errors.BadArgumentError(
+            'group_by argument cannot be empty')
+      for prop in group_by:
+        if not isinstance(prop, basestring):
+          raise datastore_errors.BadArgumentError(
+              'group_by argument should contain only strings (%r)' % (prop,))
+
     self._key_filter = _QueryKeyFilter(app=app, namespace=namespace, kind=kind,
                                        ancestor=ancestor)
     self._order = order
     self._filter_predicate = filter_predicate
+    self._group_by = group_by
 
   @property
   def app(self):
@@ -1807,6 +1987,10 @@ class Query(_BaseQuery):
   def order(self):
     return self._order
 
+  @property
+  def group_by(self):
+    return self._group_by
+
   def __repr__(self):
     args = []
     args.append('app=%r' % self.app)
@@ -1826,6 +2010,9 @@ class Query(_BaseQuery):
     order = self.order
     if order is not None:
       args.append('order=%r' % order)
+    group_by = self.group_by
+    if group_by is not None:
+      args.append('group_by=%r' % (group_by,))
     return '%s(%s)' % (self.__class__.__name__, ', '.join(args))
 
   def run_async(self, conn, query_options=None):
@@ -1848,6 +2035,9 @@ class Query(_BaseQuery):
 
   @classmethod
   def _from_pb(cls, query_pb):
+    kind = query_pb.has_kind() and query_pb.kind().decode('utf-8') or None
+    ancestor = query_pb.has_ancestor() and query_pb.ancestor() or None
+
     filter_predicate = None
     if query_pb.filter_size() > 0:
       filter_predicate = CompositeFilter(
@@ -1860,14 +2050,18 @@ class Query(_BaseQuery):
       order = CompositeOrder([PropertyOrder._from_pb(order_pb)
                               for order_pb in query_pb.order_list()])
 
-    ancestor = query_pb.has_ancestor() and query_pb.ancestor() or None
-    kind = query_pb.has_kind() and query_pb.kind().decode('utf-8') or None
+    group_by = None
+    if query_pb.group_by_property_name_size() > 0:
+      group_by = tuple(name.decode('utf-8')
+                       for name in query_pb.group_by_property_name_list())
+
     return Query(app=query_pb.app().decode('utf-8'),
                  namespace=query_pb.name_space().decode('utf-8'),
                  kind=kind,
                  ancestor=ancestor,
                  filter_predicate=filter_predicate,
-                 order=order)
+                 order=order,
+                 group_by=group_by)
 
   def _to_pb(self, conn, query_options):
     """Returns the internal only pb representation."""
@@ -1884,12 +2078,25 @@ class Query(_BaseQuery):
         pb.add_order().CopyFrom(order)
 
 
+    if self._group_by:
+      pb.group_by_property_name_list().extend(self._group_by)
+
+
     if QueryOptions.keys_only(query_options, conn.config):
       pb.set_keys_only(True)
 
     projection = QueryOptions.projection(query_options, conn.config)
     if projection:
+      if self._group_by:
+        extra = set(projection) - set(self._group_by)
+        if extra:
+          raise datastore_errors.BadRequestError(
+              'projections includes properties not in the group_by argument: %s'
+              % extra)
       pb.property_name_list().extend(projection)
+    elif self._group_by:
+      raise datastore_errors.BadRequestError(
+          'cannot specify group_by without a projection')
 
     if QueryOptions.produce_cursors(query_options, conn.config):
       pb.set_compile(True)
@@ -2039,6 +2246,34 @@ class _AugmentedQuery(_BaseQuery):
     self._max_filtered_count = max_filtered_count
     self._in_memory_filter = in_memory_filter
     self._in_memory_results = in_memory_results
+
+  @property
+  def app(self):
+    return self._query._key_filter.app
+
+  @property
+  def namespace(self):
+    return self._query._key_filter.namespace
+
+  @property
+  def kind(self):
+    return self._query._key_filter.kind
+
+  @property
+  def ancestor(self):
+    return self._query._key_filter.ancestor
+
+  @property
+  def filter_predicate(self):
+    return self._query._filter_predicate
+
+  @property
+  def order(self):
+    return self._query._order
+
+  @property
+  def group_by(self):
+    return self._query._group_by
 
   def run_async(self, conn, query_options=None):
     if not isinstance(conn, datastore_rpc.BaseConnection):
@@ -2245,6 +2480,8 @@ class Batch(object):
   offset or results needed). The Batcher class hides these limitations.
   """
 
+  __skipped_cursor = None
+
   @classmethod
   @datastore_rpc._positional(5)
   def create_async(cls, query, query_options, conn, req,
@@ -2345,20 +2582,29 @@ class Batch(object):
     return self._batch_shared.compiled_query
 
   def cursor(self, index):
-    """Gets the cursor that points to the result at the given index.
+    """Gets the cursor that points just after the result at index - 1.
 
     The index is relative to first result in .results. Since start_cursor
-    points to the position before the first skipped result and the end_cursor
-    points to the position after the last result, the range of indexes this
-    function supports is limited to [-skipped_results, len(results)].
+    points to the position before the first skipped result, the range of
+    indexes this function supports is limited to
+    [-skipped_results, len(results)].
+
+    For example, using start_cursor=batch.cursor(i) and
+    end_cursor=batch.cursor(j) will return the results found in
+    batch.results[i:j]. Note that any result added in the range (i-1, j]
+    will appear in the new query's results.
+
+    Warning: Any index in the range (-skipped_results, 0) may cause
+    continuation to miss or duplicate results if outside a transaction.
 
     Args:
       index: An int, the index relative to the first result before which the
         cursor should point.
 
     Returns:
-      A Cursor that points just before the result at the given index which if
-      used as a start_cursor will cause the first result to result[index].
+      A Cursor that points to a position just after the result index - 1,
+      which if used as a start_cursor will cause the first result to be
+      batch.result[index].
     """
     if not isinstance(index, (int, long)):
       raise datastore_errors.BadArgumentError(
@@ -2368,11 +2614,21 @@ class Batch(object):
           'index argument must be in the inclusive range [%d, %d]' %
           (-self._skipped_results, len(self.__results)))
 
-    if index == len(self.__results):
-      return self.__end_cursor
-    elif index == -self._skipped_results:
+    if index == -self._skipped_results:
       return self.__start_cursor
+    elif (index == 0 and
+          self.__skipped_cursor):
+      return Cursor(_cursor_pb=self.__skipped_cursor)
+    elif index > 0 and self.__result_cursors:
+      return Cursor(_cursor_pb=self.__result_cursors[index - 1])
+
+    elif index == len(self.__results):
+      return self.__end_cursor
     else:
+
+
+
+
       return self.__start_cursor.advance(index + self._skipped_results,
                                          self._batch_shared.query,
                                          self._batch_shared.conn)
@@ -2396,8 +2652,7 @@ class Batch(object):
     req = self._to_pb(fetch_options)
 
     config = self._batch_shared.query_options.merge(fetch_options)
-    return next_batch._make_query_result_rpc_call(
-        'Next', config, req)
+    return next_batch._make_query_result_rpc_call('Next', config, req)
 
   def _to_pb(self, fetch_options=None):
     req = datastore_pb.NextRequest()
@@ -2425,7 +2680,10 @@ class Batch(object):
     self.__datastore_cursor = next_batch.__datastore_cursor
     next_batch.__datastore_cursor = None
     self.__more_results = next_batch.__more_results
+    if not self.__results:
+      self.__skipped_cursor = next_batch.__skipped_cursor
     self.__results.extend(next_batch.__results)
+    self.__result_cursors.extend(next_batch.__result_cursors)
     self.__end_cursor = next_batch.__end_cursor
     self._skipped_results += next_batch._skipped_results
 
@@ -2440,9 +2698,11 @@ class Batch(object):
     Returns:
       A UserRPC object that can be used to fetch the result of the RPC.
     """
-    return self._batch_shared.conn.make_rpc_call(config, name, req,
-                                                 datastore_pb.QueryResult(),
-                                                 self.__query_result_hook)
+    return self._batch_shared.conn._make_rpc_call(config, name, req,
+                                                  datastore_pb.QueryResult(),
+                                                  self.__query_result_hook)
+
+  _need_index_header = 'The suggested index for this query is:'
 
   def __query_result_hook(self, rpc):
     """Internal method used as get_result_hook for RunQuery/Next operation."""
@@ -2454,15 +2714,24 @@ class Batch(object):
         _, kind, ancestor, props = datastore_index.CompositeIndexForQuery(
             rpc.request)
 
-        yaml = datastore_index.IndexYamlForQuery(
-           kind, ancestor, datastore_index.GetRecommendedIndexProperties(props))
+        props = datastore_index.GetRecommendedIndexProperties(props)
+        yaml = datastore_index.IndexYamlForQuery(kind, ancestor, props)
+        xml = datastore_index.IndexXmlForQuery(kind, ancestor, props)
+
+
         raise datastore_errors.NeedIndexError(
-            str(exc) + '\nThe suggested index for this query is:\n' + yaml)
+            '\n'.join([str(exc), self._need_index_header, yaml]),
+            original_message=str(exc), header=self._need_index_header,
+            yaml_index=yaml, xml_index=xml)
       raise
     query_result = rpc.response
 
     self._batch_shared.process_query_result_if_first(query_result)
 
+    if query_result.has_skipped_results_compiled_cursor():
+      self.__skipped_cursor = query_result.skipped_results_compiled_cursor()
+
+    self.__result_cursors = list(query_result.result_compiled_cursor_list())
     self.__end_cursor = Cursor._from_query_result(query_result)
     self._skipped_results = query_result.skipped_results()
 
@@ -2724,12 +2993,17 @@ class Batcher(object):
           batch_size = needed_results
         else:
           batch_size = None
-        next_batch = batch.next_batch(FetchOptions(
+
+        self.__next_batch = batch.next_batch_async(FetchOptions(
             offset=max(0, self.__initial_offset - self.__skipped_results),
             batch_size=batch_size))
+        next_batch = self.__next_batch.get_result()
+        self.__next_batch = None
         self.__skipped_results += next_batch.skipped_results
         needed_results = max(0, needed_results - len(next_batch.results))
         batch._extend(next_batch)
+
+
 
 
 
@@ -2759,6 +3033,10 @@ class ResultsIterator(object):
   points just after the last result returned by the iterator.
   """
 
+  __current_batch = None
+  __current_pos = 0
+  __last_cursor = None
+
   def __init__(self, batcher):
     """Constructor.
 
@@ -2769,10 +3047,7 @@ class ResultsIterator(object):
       raise datastore_errors.BadArgumentError(
           'batcher argument should be datastore_query.Batcher (%r)' %
           (batcher,))
-
     self.__batcher = batcher
-    self.__current_batch = None
-    self.__current_pos = 0
 
   def index_list(self):
     """Returns the list of indexes used to perform the query.
@@ -2781,12 +3056,18 @@ class ResultsIterator(object):
     return self._ensure_current_batch().index_list
 
   def cursor(self):
-    """Returns a cursor that points just after the last result returned."""
-    return self._ensure_current_batch().cursor(self.__current_pos)
+    """Returns a cursor that points just after the last result returned.
+
+    If next() throws an exception, this function returns the end_cursor from
+    the last successful batch or throws the same exception if no batch was
+    successful.
+    """
+    return (self.__last_cursor or
+            self._ensure_current_batch().cursor(self.__current_pos))
 
   def _ensure_current_batch(self):
     if not self.__current_batch:
-      self.__current_batch = self.__batcher.next()
+      self.__current_batch = self.__batcher.next_batch(Batcher.AT_LEAST_OFFSET)
       self.__current_pos = 0
     return self.__current_batch
 
@@ -2795,10 +3076,7 @@ class ResultsIterator(object):
 
     Internal only do not use.
     """
-    if not self.__current_batch:
-      self.__current_batch = self.__batcher.next()
-      self.__current_pos = 0
-    return self.__current_batch._compiled_query()
+    return self._ensure_current_batch()._compiled_query()
 
 
   def next(self):
@@ -2806,12 +3084,16 @@ class ResultsIterator(object):
     while (not self.__current_batch or
         self.__current_pos >= len(self.__current_batch.results)):
 
-      next_batch = self.__batcher.next()
-      if not next_batch:
+      try:
 
 
-        raise StopIteration
 
+        next_batch = self.__batcher.next_batch(Batcher.AT_LEAST_OFFSET)
+      except:
+
+        if self.__current_batch:
+          self.__last_cursor = self.__current_batch.end_cursor
+        raise
       self.__current_pos = 0
       self.__current_batch = next_batch
 

@@ -622,8 +622,11 @@ class CreateLogoutURLResponse(ProtocolBuffer.ProtocolMessage):
 class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
   has_scope_ = 0
   scope_ = ""
+  has_request_writer_permission_ = 0
+  request_writer_permission_ = 0
 
   def __init__(self, contents=None):
+    self.scopes_ = []
     if contents is not None: self.MergeFromString(contents)
 
   def scope(self): return self.scope_
@@ -639,15 +642,50 @@ class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
 
   def has_scope(self): return self.has_scope_
 
+  def scopes_size(self): return len(self.scopes_)
+  def scopes_list(self): return self.scopes_
+
+  def scopes(self, i):
+    return self.scopes_[i]
+
+  def set_scopes(self, i, x):
+    self.scopes_[i] = x
+
+  def add_scopes(self, x):
+    self.scopes_.append(x)
+
+  def clear_scopes(self):
+    self.scopes_ = []
+
+  def request_writer_permission(self): return self.request_writer_permission_
+
+  def set_request_writer_permission(self, x):
+    self.has_request_writer_permission_ = 1
+    self.request_writer_permission_ = x
+
+  def clear_request_writer_permission(self):
+    if self.has_request_writer_permission_:
+      self.has_request_writer_permission_ = 0
+      self.request_writer_permission_ = 0
+
+  def has_request_writer_permission(self): return self.has_request_writer_permission_
+
 
   def MergeFrom(self, x):
     assert x is not self
     if (x.has_scope()): self.set_scope(x.scope())
+    for i in xrange(x.scopes_size()): self.add_scopes(x.scopes(i))
+    if (x.has_request_writer_permission()): self.set_request_writer_permission(x.request_writer_permission())
 
   def Equals(self, x):
     if x is self: return 1
     if self.has_scope_ != x.has_scope_: return 0
     if self.has_scope_ and self.scope_ != x.scope_: return 0
+    if len(self.scopes_) != len(x.scopes_): return 0
+    for e1, e2 in zip(self.scopes_, x.scopes_):
+      if e1 != e2: return 0
+    if self.has_request_writer_permission_ != x.has_request_writer_permission_: return 0
+    if self.has_request_writer_permission_ and self.request_writer_permission_ != x.request_writer_permission_: return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -657,31 +695,57 @@ class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
   def ByteSize(self):
     n = 0
     if (self.has_scope_): n += 1 + self.lengthString(len(self.scope_))
+    n += 1 * len(self.scopes_)
+    for i in xrange(len(self.scopes_)): n += self.lengthString(len(self.scopes_[i]))
+    if (self.has_request_writer_permission_): n += 2
     return n
 
   def ByteSizePartial(self):
     n = 0
     if (self.has_scope_): n += 1 + self.lengthString(len(self.scope_))
+    n += 1 * len(self.scopes_)
+    for i in xrange(len(self.scopes_)): n += self.lengthString(len(self.scopes_[i]))
+    if (self.has_request_writer_permission_): n += 2
     return n
 
   def Clear(self):
     self.clear_scope()
+    self.clear_scopes()
+    self.clear_request_writer_permission()
 
   def OutputUnchecked(self, out):
     if (self.has_scope_):
       out.putVarInt32(10)
       out.putPrefixedString(self.scope_)
+    for i in xrange(len(self.scopes_)):
+      out.putVarInt32(18)
+      out.putPrefixedString(self.scopes_[i])
+    if (self.has_request_writer_permission_):
+      out.putVarInt32(24)
+      out.putBoolean(self.request_writer_permission_)
 
   def OutputPartial(self, out):
     if (self.has_scope_):
       out.putVarInt32(10)
       out.putPrefixedString(self.scope_)
+    for i in xrange(len(self.scopes_)):
+      out.putVarInt32(18)
+      out.putPrefixedString(self.scopes_[i])
+    if (self.has_request_writer_permission_):
+      out.putVarInt32(24)
+      out.putBoolean(self.request_writer_permission_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
       tt = d.getVarInt32()
       if tt == 10:
         self.set_scope(d.getPrefixedString())
+        continue
+      if tt == 18:
+        self.add_scopes(d.getPrefixedString())
+        continue
+      if tt == 24:
+        self.set_request_writer_permission(d.getBoolean())
         continue
 
 
@@ -692,6 +756,13 @@ class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
   def __str__(self, prefix="", printElemNumber=0):
     res=""
     if self.has_scope_: res+=prefix+("scope: %s\n" % self.DebugFormatString(self.scope_))
+    cnt=0
+    for e in self.scopes_:
+      elm=""
+      if printElemNumber: elm="(%d)" % cnt
+      res+=prefix+("scopes%s: %s\n" % (elm, self.DebugFormatString(e)))
+      cnt+=1
+    if self.has_request_writer_permission_: res+=prefix+("request_writer_permission: %s\n" % self.DebugFormatBool(self.request_writer_permission_))
     return res
 
 
@@ -699,16 +770,22 @@ class GetOAuthUserRequest(ProtocolBuffer.ProtocolMessage):
     return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])
 
   kscope = 1
+  kscopes = 2
+  krequest_writer_permission = 3
 
   _TEXT = _BuildTagLookupTable({
     0: "ErrorCode",
     1: "scope",
-  }, 1)
+    2: "scopes",
+    3: "request_writer_permission",
+  }, 3)
 
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
     1: ProtocolBuffer.Encoder.STRING,
-  }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
+    2: ProtocolBuffer.Encoder.STRING,
+    3: ProtocolBuffer.Encoder.NUMERIC,
+  }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
 
 
   _STYLE = """"""
@@ -725,8 +802,13 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
   user_organization_ = ""
   has_is_admin_ = 0
   is_admin_ = 0
+  has_client_id_ = 0
+  client_id_ = ""
+  has_is_project_writer_ = 0
+  is_project_writer_ = 0
 
   def __init__(self, contents=None):
+    self.scopes_ = []
     if contents is not None: self.MergeFromString(contents)
 
   def email(self): return self.email_
@@ -794,6 +876,47 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
 
   def has_is_admin(self): return self.has_is_admin_
 
+  def client_id(self): return self.client_id_
+
+  def set_client_id(self, x):
+    self.has_client_id_ = 1
+    self.client_id_ = x
+
+  def clear_client_id(self):
+    if self.has_client_id_:
+      self.has_client_id_ = 0
+      self.client_id_ = ""
+
+  def has_client_id(self): return self.has_client_id_
+
+  def scopes_size(self): return len(self.scopes_)
+  def scopes_list(self): return self.scopes_
+
+  def scopes(self, i):
+    return self.scopes_[i]
+
+  def set_scopes(self, i, x):
+    self.scopes_[i] = x
+
+  def add_scopes(self, x):
+    self.scopes_.append(x)
+
+  def clear_scopes(self):
+    self.scopes_ = []
+
+  def is_project_writer(self): return self.is_project_writer_
+
+  def set_is_project_writer(self, x):
+    self.has_is_project_writer_ = 1
+    self.is_project_writer_ = x
+
+  def clear_is_project_writer(self):
+    if self.has_is_project_writer_:
+      self.has_is_project_writer_ = 0
+      self.is_project_writer_ = 0
+
+  def has_is_project_writer(self): return self.has_is_project_writer_
+
 
   def MergeFrom(self, x):
     assert x is not self
@@ -802,6 +925,9 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     if (x.has_auth_domain()): self.set_auth_domain(x.auth_domain())
     if (x.has_user_organization()): self.set_user_organization(x.user_organization())
     if (x.has_is_admin()): self.set_is_admin(x.is_admin())
+    if (x.has_client_id()): self.set_client_id(x.client_id())
+    for i in xrange(x.scopes_size()): self.add_scopes(x.scopes(i))
+    if (x.has_is_project_writer()): self.set_is_project_writer(x.is_project_writer())
 
   def Equals(self, x):
     if x is self: return 1
@@ -815,6 +941,13 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     if self.has_user_organization_ and self.user_organization_ != x.user_organization_: return 0
     if self.has_is_admin_ != x.has_is_admin_: return 0
     if self.has_is_admin_ and self.is_admin_ != x.is_admin_: return 0
+    if self.has_client_id_ != x.has_client_id_: return 0
+    if self.has_client_id_ and self.client_id_ != x.client_id_: return 0
+    if len(self.scopes_) != len(x.scopes_): return 0
+    for e1, e2 in zip(self.scopes_, x.scopes_):
+      if e1 != e2: return 0
+    if self.has_is_project_writer_ != x.has_is_project_writer_: return 0
+    if self.has_is_project_writer_ and self.is_project_writer_ != x.is_project_writer_: return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -840,6 +973,10 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     n += self.lengthString(len(self.auth_domain_))
     if (self.has_user_organization_): n += 1 + self.lengthString(len(self.user_organization_))
     if (self.has_is_admin_): n += 2
+    if (self.has_client_id_): n += 1 + self.lengthString(len(self.client_id_))
+    n += 1 * len(self.scopes_)
+    for i in xrange(len(self.scopes_)): n += self.lengthString(len(self.scopes_[i]))
+    if (self.has_is_project_writer_): n += 2
     return n + 3
 
   def ByteSizePartial(self):
@@ -855,6 +992,10 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
       n += self.lengthString(len(self.auth_domain_))
     if (self.has_user_organization_): n += 1 + self.lengthString(len(self.user_organization_))
     if (self.has_is_admin_): n += 2
+    if (self.has_client_id_): n += 1 + self.lengthString(len(self.client_id_))
+    n += 1 * len(self.scopes_)
+    for i in xrange(len(self.scopes_)): n += self.lengthString(len(self.scopes_[i]))
+    if (self.has_is_project_writer_): n += 2
     return n
 
   def Clear(self):
@@ -863,6 +1004,9 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     self.clear_auth_domain()
     self.clear_user_organization()
     self.clear_is_admin()
+    self.clear_client_id()
+    self.clear_scopes()
+    self.clear_is_project_writer()
 
   def OutputUnchecked(self, out):
     out.putVarInt32(10)
@@ -877,6 +1021,15 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     if (self.has_is_admin_):
       out.putVarInt32(40)
       out.putBoolean(self.is_admin_)
+    if (self.has_client_id_):
+      out.putVarInt32(50)
+      out.putPrefixedString(self.client_id_)
+    for i in xrange(len(self.scopes_)):
+      out.putVarInt32(58)
+      out.putPrefixedString(self.scopes_[i])
+    if (self.has_is_project_writer_):
+      out.putVarInt32(64)
+      out.putBoolean(self.is_project_writer_)
 
   def OutputPartial(self, out):
     if (self.has_email_):
@@ -894,6 +1047,15 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     if (self.has_is_admin_):
       out.putVarInt32(40)
       out.putBoolean(self.is_admin_)
+    if (self.has_client_id_):
+      out.putVarInt32(50)
+      out.putPrefixedString(self.client_id_)
+    for i in xrange(len(self.scopes_)):
+      out.putVarInt32(58)
+      out.putPrefixedString(self.scopes_[i])
+    if (self.has_is_project_writer_):
+      out.putVarInt32(64)
+      out.putBoolean(self.is_project_writer_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
@@ -913,6 +1075,15 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 40:
         self.set_is_admin(d.getBoolean())
         continue
+      if tt == 50:
+        self.set_client_id(d.getPrefixedString())
+        continue
+      if tt == 58:
+        self.add_scopes(d.getPrefixedString())
+        continue
+      if tt == 64:
+        self.set_is_project_writer(d.getBoolean())
+        continue
 
 
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
@@ -926,6 +1097,14 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     if self.has_auth_domain_: res+=prefix+("auth_domain: %s\n" % self.DebugFormatString(self.auth_domain_))
     if self.has_user_organization_: res+=prefix+("user_organization: %s\n" % self.DebugFormatString(self.user_organization_))
     if self.has_is_admin_: res+=prefix+("is_admin: %s\n" % self.DebugFormatBool(self.is_admin_))
+    if self.has_client_id_: res+=prefix+("client_id: %s\n" % self.DebugFormatString(self.client_id_))
+    cnt=0
+    for e in self.scopes_:
+      elm=""
+      if printElemNumber: elm="(%d)" % cnt
+      res+=prefix+("scopes%s: %s\n" % (elm, self.DebugFormatString(e)))
+      cnt+=1
+    if self.has_is_project_writer_: res+=prefix+("is_project_writer: %s\n" % self.DebugFormatBool(self.is_project_writer_))
     return res
 
 
@@ -937,6 +1116,9 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
   kauth_domain = 3
   kuser_organization = 4
   kis_admin = 5
+  kclient_id = 6
+  kscopes = 7
+  kis_project_writer = 8
 
   _TEXT = _BuildTagLookupTable({
     0: "ErrorCode",
@@ -945,7 +1127,10 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     3: "auth_domain",
     4: "user_organization",
     5: "is_admin",
-  }, 5)
+    6: "client_id",
+    7: "scopes",
+    8: "is_project_writer",
+  }, 8)
 
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
@@ -954,7 +1139,10 @@ class GetOAuthUserResponse(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.STRING,
     5: ProtocolBuffer.Encoder.NUMERIC,
-  }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+    6: ProtocolBuffer.Encoder.STRING,
+    7: ProtocolBuffer.Encoder.STRING,
+    8: ProtocolBuffer.Encoder.NUMERIC,
+  }, 8, ProtocolBuffer.Encoder.MAX_TYPE)
 
 
   _STYLE = """"""
@@ -1125,480 +1313,7 @@ class CheckOAuthSignatureResponse(ProtocolBuffer.ProtocolMessage):
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
   _PROTO_DESCRIPTOR_NAME = 'apphosting.CheckOAuthSignatureResponse'
-class CreateFederatedLoginRequest(ProtocolBuffer.ProtocolMessage):
-  has_claimed_id_ = 0
-  claimed_id_ = ""
-  has_continue_url_ = 0
-  continue_url_ = ""
-  has_authority_ = 0
-  authority_ = ""
-
-  def __init__(self, contents=None):
-    if contents is not None: self.MergeFromString(contents)
-
-  def claimed_id(self): return self.claimed_id_
-
-  def set_claimed_id(self, x):
-    self.has_claimed_id_ = 1
-    self.claimed_id_ = x
-
-  def clear_claimed_id(self):
-    if self.has_claimed_id_:
-      self.has_claimed_id_ = 0
-      self.claimed_id_ = ""
-
-  def has_claimed_id(self): return self.has_claimed_id_
-
-  def continue_url(self): return self.continue_url_
-
-  def set_continue_url(self, x):
-    self.has_continue_url_ = 1
-    self.continue_url_ = x
-
-  def clear_continue_url(self):
-    if self.has_continue_url_:
-      self.has_continue_url_ = 0
-      self.continue_url_ = ""
-
-  def has_continue_url(self): return self.has_continue_url_
-
-  def authority(self): return self.authority_
-
-  def set_authority(self, x):
-    self.has_authority_ = 1
-    self.authority_ = x
-
-  def clear_authority(self):
-    if self.has_authority_:
-      self.has_authority_ = 0
-      self.authority_ = ""
-
-  def has_authority(self): return self.has_authority_
-
-
-  def MergeFrom(self, x):
-    assert x is not self
-    if (x.has_claimed_id()): self.set_claimed_id(x.claimed_id())
-    if (x.has_continue_url()): self.set_continue_url(x.continue_url())
-    if (x.has_authority()): self.set_authority(x.authority())
-
-  def Equals(self, x):
-    if x is self: return 1
-    if self.has_claimed_id_ != x.has_claimed_id_: return 0
-    if self.has_claimed_id_ and self.claimed_id_ != x.claimed_id_: return 0
-    if self.has_continue_url_ != x.has_continue_url_: return 0
-    if self.has_continue_url_ and self.continue_url_ != x.continue_url_: return 0
-    if self.has_authority_ != x.has_authority_: return 0
-    if self.has_authority_ and self.authority_ != x.authority_: return 0
-    return 1
-
-  def IsInitialized(self, debug_strs=None):
-    initialized = 1
-    if (not self.has_claimed_id_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: claimed_id not set.')
-    if (not self.has_continue_url_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: continue_url not set.')
-    return initialized
-
-  def ByteSize(self):
-    n = 0
-    n += self.lengthString(len(self.claimed_id_))
-    n += self.lengthString(len(self.continue_url_))
-    if (self.has_authority_): n += 1 + self.lengthString(len(self.authority_))
-    return n + 2
-
-  def ByteSizePartial(self):
-    n = 0
-    if (self.has_claimed_id_):
-      n += 1
-      n += self.lengthString(len(self.claimed_id_))
-    if (self.has_continue_url_):
-      n += 1
-      n += self.lengthString(len(self.continue_url_))
-    if (self.has_authority_): n += 1 + self.lengthString(len(self.authority_))
-    return n
-
-  def Clear(self):
-    self.clear_claimed_id()
-    self.clear_continue_url()
-    self.clear_authority()
-
-  def OutputUnchecked(self, out):
-    out.putVarInt32(10)
-    out.putPrefixedString(self.claimed_id_)
-    out.putVarInt32(18)
-    out.putPrefixedString(self.continue_url_)
-    if (self.has_authority_):
-      out.putVarInt32(26)
-      out.putPrefixedString(self.authority_)
-
-  def OutputPartial(self, out):
-    if (self.has_claimed_id_):
-      out.putVarInt32(10)
-      out.putPrefixedString(self.claimed_id_)
-    if (self.has_continue_url_):
-      out.putVarInt32(18)
-      out.putPrefixedString(self.continue_url_)
-    if (self.has_authority_):
-      out.putVarInt32(26)
-      out.putPrefixedString(self.authority_)
-
-  def TryMerge(self, d):
-    while d.avail() > 0:
-      tt = d.getVarInt32()
-      if tt == 10:
-        self.set_claimed_id(d.getPrefixedString())
-        continue
-      if tt == 18:
-        self.set_continue_url(d.getPrefixedString())
-        continue
-      if tt == 26:
-        self.set_authority(d.getPrefixedString())
-        continue
-
-
-      if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
-      d.skipData(tt)
-
-
-  def __str__(self, prefix="", printElemNumber=0):
-    res=""
-    if self.has_claimed_id_: res+=prefix+("claimed_id: %s\n" % self.DebugFormatString(self.claimed_id_))
-    if self.has_continue_url_: res+=prefix+("continue_url: %s\n" % self.DebugFormatString(self.continue_url_))
-    if self.has_authority_: res+=prefix+("authority: %s\n" % self.DebugFormatString(self.authority_))
-    return res
-
-
-  def _BuildTagLookupTable(sparse, maxtag, default=None):
-    return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])
-
-  kclaimed_id = 1
-  kcontinue_url = 2
-  kauthority = 3
-
-  _TEXT = _BuildTagLookupTable({
-    0: "ErrorCode",
-    1: "claimed_id",
-    2: "continue_url",
-    3: "authority",
-  }, 3)
-
-  _TYPES = _BuildTagLookupTable({
-    0: ProtocolBuffer.Encoder.NUMERIC,
-    1: ProtocolBuffer.Encoder.STRING,
-    2: ProtocolBuffer.Encoder.STRING,
-    3: ProtocolBuffer.Encoder.STRING,
-  }, 3, ProtocolBuffer.Encoder.MAX_TYPE)
-
-
-  _STYLE = """"""
-  _STYLE_CONTENT_TYPE = """"""
-  _PROTO_DESCRIPTOR_NAME = 'apphosting.CreateFederatedLoginRequest'
-class CreateFederatedLoginResponse(ProtocolBuffer.ProtocolMessage):
-  has_redirected_url_ = 0
-  redirected_url_ = ""
-
-  def __init__(self, contents=None):
-    if contents is not None: self.MergeFromString(contents)
-
-  def redirected_url(self): return self.redirected_url_
-
-  def set_redirected_url(self, x):
-    self.has_redirected_url_ = 1
-    self.redirected_url_ = x
-
-  def clear_redirected_url(self):
-    if self.has_redirected_url_:
-      self.has_redirected_url_ = 0
-      self.redirected_url_ = ""
-
-  def has_redirected_url(self): return self.has_redirected_url_
-
-
-  def MergeFrom(self, x):
-    assert x is not self
-    if (x.has_redirected_url()): self.set_redirected_url(x.redirected_url())
-
-  def Equals(self, x):
-    if x is self: return 1
-    if self.has_redirected_url_ != x.has_redirected_url_: return 0
-    if self.has_redirected_url_ and self.redirected_url_ != x.redirected_url_: return 0
-    return 1
-
-  def IsInitialized(self, debug_strs=None):
-    initialized = 1
-    if (not self.has_redirected_url_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: redirected_url not set.')
-    return initialized
-
-  def ByteSize(self):
-    n = 0
-    n += self.lengthString(len(self.redirected_url_))
-    return n + 1
-
-  def ByteSizePartial(self):
-    n = 0
-    if (self.has_redirected_url_):
-      n += 1
-      n += self.lengthString(len(self.redirected_url_))
-    return n
-
-  def Clear(self):
-    self.clear_redirected_url()
-
-  def OutputUnchecked(self, out):
-    out.putVarInt32(10)
-    out.putPrefixedString(self.redirected_url_)
-
-  def OutputPartial(self, out):
-    if (self.has_redirected_url_):
-      out.putVarInt32(10)
-      out.putPrefixedString(self.redirected_url_)
-
-  def TryMerge(self, d):
-    while d.avail() > 0:
-      tt = d.getVarInt32()
-      if tt == 10:
-        self.set_redirected_url(d.getPrefixedString())
-        continue
-
-
-      if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
-      d.skipData(tt)
-
-
-  def __str__(self, prefix="", printElemNumber=0):
-    res=""
-    if self.has_redirected_url_: res+=prefix+("redirected_url: %s\n" % self.DebugFormatString(self.redirected_url_))
-    return res
-
-
-  def _BuildTagLookupTable(sparse, maxtag, default=None):
-    return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])
-
-  kredirected_url = 1
-
-  _TEXT = _BuildTagLookupTable({
-    0: "ErrorCode",
-    1: "redirected_url",
-  }, 1)
-
-  _TYPES = _BuildTagLookupTable({
-    0: ProtocolBuffer.Encoder.NUMERIC,
-    1: ProtocolBuffer.Encoder.STRING,
-  }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
-
-
-  _STYLE = """"""
-  _STYLE_CONTENT_TYPE = """"""
-  _PROTO_DESCRIPTOR_NAME = 'apphosting.CreateFederatedLoginResponse'
-class CreateFederatedLogoutRequest(ProtocolBuffer.ProtocolMessage):
-  has_destination_url_ = 0
-  destination_url_ = ""
-
-  def __init__(self, contents=None):
-    if contents is not None: self.MergeFromString(contents)
-
-  def destination_url(self): return self.destination_url_
-
-  def set_destination_url(self, x):
-    self.has_destination_url_ = 1
-    self.destination_url_ = x
-
-  def clear_destination_url(self):
-    if self.has_destination_url_:
-      self.has_destination_url_ = 0
-      self.destination_url_ = ""
-
-  def has_destination_url(self): return self.has_destination_url_
-
-
-  def MergeFrom(self, x):
-    assert x is not self
-    if (x.has_destination_url()): self.set_destination_url(x.destination_url())
-
-  def Equals(self, x):
-    if x is self: return 1
-    if self.has_destination_url_ != x.has_destination_url_: return 0
-    if self.has_destination_url_ and self.destination_url_ != x.destination_url_: return 0
-    return 1
-
-  def IsInitialized(self, debug_strs=None):
-    initialized = 1
-    if (not self.has_destination_url_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: destination_url not set.')
-    return initialized
-
-  def ByteSize(self):
-    n = 0
-    n += self.lengthString(len(self.destination_url_))
-    return n + 1
-
-  def ByteSizePartial(self):
-    n = 0
-    if (self.has_destination_url_):
-      n += 1
-      n += self.lengthString(len(self.destination_url_))
-    return n
-
-  def Clear(self):
-    self.clear_destination_url()
-
-  def OutputUnchecked(self, out):
-    out.putVarInt32(10)
-    out.putPrefixedString(self.destination_url_)
-
-  def OutputPartial(self, out):
-    if (self.has_destination_url_):
-      out.putVarInt32(10)
-      out.putPrefixedString(self.destination_url_)
-
-  def TryMerge(self, d):
-    while d.avail() > 0:
-      tt = d.getVarInt32()
-      if tt == 10:
-        self.set_destination_url(d.getPrefixedString())
-        continue
-
-
-      if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
-      d.skipData(tt)
-
-
-  def __str__(self, prefix="", printElemNumber=0):
-    res=""
-    if self.has_destination_url_: res+=prefix+("destination_url: %s\n" % self.DebugFormatString(self.destination_url_))
-    return res
-
-
-  def _BuildTagLookupTable(sparse, maxtag, default=None):
-    return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])
-
-  kdestination_url = 1
-
-  _TEXT = _BuildTagLookupTable({
-    0: "ErrorCode",
-    1: "destination_url",
-  }, 1)
-
-  _TYPES = _BuildTagLookupTable({
-    0: ProtocolBuffer.Encoder.NUMERIC,
-    1: ProtocolBuffer.Encoder.STRING,
-  }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
-
-
-  _STYLE = """"""
-  _STYLE_CONTENT_TYPE = """"""
-  _PROTO_DESCRIPTOR_NAME = 'apphosting.CreateFederatedLogoutRequest'
-class CreateFederatedLogoutResponse(ProtocolBuffer.ProtocolMessage):
-  has_logout_url_ = 0
-  logout_url_ = ""
-
-  def __init__(self, contents=None):
-    if contents is not None: self.MergeFromString(contents)
-
-  def logout_url(self): return self.logout_url_
-
-  def set_logout_url(self, x):
-    self.has_logout_url_ = 1
-    self.logout_url_ = x
-
-  def clear_logout_url(self):
-    if self.has_logout_url_:
-      self.has_logout_url_ = 0
-      self.logout_url_ = ""
-
-  def has_logout_url(self): return self.has_logout_url_
-
-
-  def MergeFrom(self, x):
-    assert x is not self
-    if (x.has_logout_url()): self.set_logout_url(x.logout_url())
-
-  def Equals(self, x):
-    if x is self: return 1
-    if self.has_logout_url_ != x.has_logout_url_: return 0
-    if self.has_logout_url_ and self.logout_url_ != x.logout_url_: return 0
-    return 1
-
-  def IsInitialized(self, debug_strs=None):
-    initialized = 1
-    if (not self.has_logout_url_):
-      initialized = 0
-      if debug_strs is not None:
-        debug_strs.append('Required field: logout_url not set.')
-    return initialized
-
-  def ByteSize(self):
-    n = 0
-    n += self.lengthString(len(self.logout_url_))
-    return n + 1
-
-  def ByteSizePartial(self):
-    n = 0
-    if (self.has_logout_url_):
-      n += 1
-      n += self.lengthString(len(self.logout_url_))
-    return n
-
-  def Clear(self):
-    self.clear_logout_url()
-
-  def OutputUnchecked(self, out):
-    out.putVarInt32(10)
-    out.putPrefixedString(self.logout_url_)
-
-  def OutputPartial(self, out):
-    if (self.has_logout_url_):
-      out.putVarInt32(10)
-      out.putPrefixedString(self.logout_url_)
-
-  def TryMerge(self, d):
-    while d.avail() > 0:
-      tt = d.getVarInt32()
-      if tt == 10:
-        self.set_logout_url(d.getPrefixedString())
-        continue
-
-
-      if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
-      d.skipData(tt)
-
-
-  def __str__(self, prefix="", printElemNumber=0):
-    res=""
-    if self.has_logout_url_: res+=prefix+("logout_url: %s\n" % self.DebugFormatString(self.logout_url_))
-    return res
-
-
-  def _BuildTagLookupTable(sparse, maxtag, default=None):
-    return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])
-
-  klogout_url = 1
-
-  _TEXT = _BuildTagLookupTable({
-    0: "ErrorCode",
-    1: "logout_url",
-  }, 1)
-
-  _TYPES = _BuildTagLookupTable({
-    0: ProtocolBuffer.Encoder.NUMERIC,
-    1: ProtocolBuffer.Encoder.STRING,
-  }, 1, ProtocolBuffer.Encoder.MAX_TYPE)
-
-
-  _STYLE = """"""
-  _STYLE_CONTENT_TYPE = """"""
-  _PROTO_DESCRIPTOR_NAME = 'apphosting.CreateFederatedLogoutResponse'
 if _extension_runtime:
   pass
 
-__all__ = ['UserServiceError','CreateLoginURLRequest','CreateLoginURLResponse','CreateLogoutURLRequest','CreateLogoutURLResponse','GetOAuthUserRequest','GetOAuthUserResponse','CheckOAuthSignatureRequest','CheckOAuthSignatureResponse','CreateFederatedLoginRequest','CreateFederatedLoginResponse','CreateFederatedLogoutRequest','CreateFederatedLogoutResponse']
+__all__ = ['UserServiceError','CreateLoginURLRequest','CreateLoginURLResponse','CreateLogoutURLRequest','CreateLogoutURLResponse','GetOAuthUserRequest','GetOAuthUserResponse','CheckOAuthSignatureRequest','CheckOAuthSignatureResponse']

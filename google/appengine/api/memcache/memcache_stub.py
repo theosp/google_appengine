@@ -114,6 +114,8 @@ class MemcacheServiceStub(apiproxy_stub.APIProxyStub):
   external servers.
   """
 
+  THREADSAFE = True
+
   def __init__(self, gettime=time.time, service_name='memcache'):
     """Initializer.
 
@@ -223,8 +225,7 @@ class MemcacheServiceStub(apiproxy_stub.APIProxyStub):
             or not old_entry.CheckLocked()):
           set_status = MemcacheSetResponse.STORED
 
-      elif (set_policy == MemcacheSetRequest.CAS and item.for_cas() and
-            item.has_cas_id()):
+      elif (set_policy == MemcacheSetRequest.CAS and item.has_cas_id()):
         if old_entry is None or old_entry.CheckLocked():
           set_status = MemcacheSetResponse.NOT_STORED
         elif old_entry.cas_id != item.cas_id():
@@ -282,7 +283,7 @@ class MemcacheServiceStub(apiproxy_stub.APIProxyStub):
     """
     key = request.key()
     entry = self._GetKey(namespace, key)
-    if entry is None:
+    if entry is None or entry.CheckLocked():
       if not request.has_initial_value():
         return None
       if namespace not in self._the_cache:

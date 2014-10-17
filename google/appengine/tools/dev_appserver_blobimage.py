@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-
-
 """Dispatcher for dynamic image serving requests.
 
 Classes:
@@ -38,8 +34,10 @@ from google.appengine.api.images import images_service_pb
 
 BLOBIMAGE_URL_PATTERN = '/_ah/img(?:/.*)?'
 
-BLOBIMAGE_RESPONSE_TEMPLATE = ('Status: %(status)s\r\nContent-Type: %(content_type)s'
-                               '\r\n\r\n%(data)s')
+BLOBIMAGE_RESPONSE_TEMPLATE = (
+    'Status: %(status)s\r\nContent-Type: %(content_type)s\r\n'
+    'Cache-Control: public, max-age=600, no-transform'
+    '\r\n\r\n%(data)s')
 
 
 BLOB_SERVING_URL_KIND = '__BlobServingUrl__'
@@ -60,9 +58,9 @@ def CreateBlobImageDispatcher(images_stub):
 
 
 
-  from google.appengine.tools import dev_appserver
+  from google.appengine.tools import old_dev_appserver
 
-  class BlobImageDispatcher(dev_appserver.URLDispatcher):
+  class BlobImageDispatcher(old_dev_appserver.URLDispatcher):
     """Dispatcher that handles image serving requests."""
 
     _size_limit = 1600

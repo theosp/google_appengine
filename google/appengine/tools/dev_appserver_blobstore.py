@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-
-
 """Blobstore support classes.
 
 Classes:
@@ -187,14 +183,19 @@ def _GetBlobMetadata(blob_key):
   return size, content_type, open_key
 
 
-def _SetRangeRequestNotSatisfiable(response):
-  """Short circuit response and return 416 error."""
+def _SetRangeRequestNotSatisfiable(response, blob_size):
+  """Short circuit response and return 416 error.
+
+  Args:
+    response: Response object to be rewritten.
+    blob_size: The size of the blob.
+  """
   response.status_code = 416
   response.status_message = 'Requested Range Not Satisfiable'
   response.body = cStringIO.StringIO('')
   response.headers['Content-Length'] = '0'
+  response.headers['Content-Range'] = '*/%d' % blob_size
   del response.headers['Content-Type']
-  del response.headers['Content-Range']
 
 
 def DownloadRewriter(response, request_headers):
@@ -224,14 +225,16 @@ def DownloadRewriter(response, request_headers):
 
     blob_size, blob_content_type, blob_open_key = _GetBlobMetadata(blob_key)
 
+    range_header = response.headers.getheader(blobstore.BLOB_RANGE_HEADER)
+    if range_header is not None:
+      del response.headers[blobstore.BLOB_RANGE_HEADER]
+    else:
+      range_header = request_headers.getheader('Range')
 
-    if blob_size is not None and blob_content_type is not None:
-      range_header = response.headers.getheader(blobstore.BLOB_RANGE_HEADER)
-      if range_header is not None:
-        del response.headers[blobstore.BLOB_RANGE_HEADER]
-      else:
-        range_header = request_headers.getheader('Range')
 
+
+    if (blob_size is not None and blob_content_type is not None and
+        response.status_code == 200):
       content_length = blob_size
       start = 0
       end = content_length
@@ -239,13 +242,13 @@ def DownloadRewriter(response, request_headers):
       if range_header:
         start, end = ParseRangeHeader(range_header)
         if start is None:
-          _SetRangeRequestNotSatisfiable(response)
+          _SetRangeRequestNotSatisfiable(response, blob_size)
           return
         else:
           if start < 0:
             start = max(blob_size + start, 0)
           elif start >= blob_size:
-            _SetRangeRequestNotSatisfiable(response)
+            _SetRangeRequestNotSatisfiable(response, blob_size)
             return
           if end is not None:
             end = min(end, blob_size)
@@ -253,6 +256,8 @@ def DownloadRewriter(response, request_headers):
             end = blob_size
           content_length = min(end, blob_size) - start
           end = start + content_length
+          response.status_code = 206
+          response.status_message = 'Partial Content'
           response.headers['Content-Range'] = 'bytes %d-%d/%d' % (
               start, end - 1, blob_size)
 
@@ -266,22 +271,21 @@ def DownloadRewriter(response, request_headers):
         response.headers['Content-Type'] = blob_content_type
       response.large_response = True
 
-
-
     else:
+
+      if response.status_code != 200:
+        logging.error('Blob-serving response with status %d, expected 200.',
+                      response.status_code)
+      else:
+        logging.error('Could not find blob with key %s.', blob_key)
 
       response.status_code = 500
       response.status_message = 'Internal Error'
       response.body = cStringIO.StringIO()
 
-      if response.headers.getheader('status'):
-        del response.headers['status']
-      if response.headers.getheader('location'):
-        del response.headers['location']
       if response.headers.getheader('content-type'):
         del response.headers['content-type']
-
-      logging.error('Could not find blob with key %s.', blob_key)
+      response.headers['Content-Length'] = '0'
 
 
 def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
@@ -292,9 +296,9 @@ def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
   """
 
 
-  from google.appengine.tools import dev_appserver
+  from google.appengine.tools import old_dev_appserver
 
-  class UploadDispatcher(dev_appserver.URLDispatcher):
+  class UploadDispatcher(old_dev_appserver.URLDispatcher):
     """Dispatcher that handles uploads."""
 
     def __init__(self):
@@ -339,6 +343,7 @@ def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
         success_path = upload_session['success_path']
         max_bytes_per_blob = upload_session['max_bytes_per_blob']
         max_bytes_total = upload_session['max_bytes_total']
+        bucket_name = upload_session.get('gs_bucket_name', None)
 
         upload_form = cgi.FieldStorage(fp=request.infile,
                                        headers=request.headers,
@@ -350,7 +355,8 @@ def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
           mime_message_string = self.__cgi_handler.GenerateMIMEMessageString(
               upload_form,
               max_bytes_per_blob=max_bytes_per_blob,
-              max_bytes_total=max_bytes_total)
+              max_bytes_total=max_bytes_total,
+              bucket_name=bucket_name)
 
           datastore.Delete(upload_session)
           self.current_session = upload_session
@@ -367,7 +373,7 @@ def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
                               'Content-Length: %d\r\n'
                               '\r\n') % (header_text, len(content_text))
 
-          return dev_appserver.AppServerRequest(
+          return old_dev_appserver.AppServerRequest(
               success_path,
               None,
               mimetools.Message(cStringIO.StringIO(complete_headers)),
@@ -401,7 +407,7 @@ def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
       Makes sure the application upload handler returned an appropriate status
       code.
       """
-      response = dev_appserver.RewriteResponse(dispatched_output)
+      response = old_dev_appserver.RewriteResponse(dispatched_output)
       logging.info('Upload handler returned %d', response.status_code)
       outfile = cStringIO.StringIO()
       outfile.write('Status: %s\n' % response.status_code)
@@ -413,8 +419,8 @@ def CreateUploadDispatcher(get_blob_storage=GetBlobStorage):
         outfile.write(''.join(response.headers.headers))
 
       outfile.seek(0)
-      dev_appserver.URLDispatcher.EndRedirect(self,
-                                              outfile,
-                                              original_output)
+      old_dev_appserver.URLDispatcher.EndRedirect(self,
+                                                  outfile,
+                                                  original_output)
 
   return UploadDispatcher()

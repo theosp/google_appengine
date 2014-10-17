@@ -49,6 +49,8 @@ __all__ = ['BLOB_INFO_KIND',
            'BLOB_RANGE_HEADER',
            'MAX_BLOB_FETCH_SIZE',
            'UPLOAD_INFO_CREATION_HEADER',
+           'CLOUD_STORAGE_OBJECT_HEADER',
+           'GS_PREFIX',
            'BlobFetchSizeTooLargeError',
            'BlobKey',
            'BlobNotFoundError',
@@ -82,9 +84,12 @@ BLOB_RANGE_HEADER = 'X-AppEngine-BlobRange'
 
 MAX_BLOB_FETCH_SIZE = (1 << 20) - (1 << 15)
 
+GS_PREFIX = '/gs/'
+
 
 
 UPLOAD_INFO_CREATION_HEADER = 'X-AppEngine-Upload-Creation'
+CLOUD_STORAGE_OBJECT_HEADER = 'X-AppEngine-Cloud-Storage-Object'
 _BASE_CREATION_HEADER_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 class Error(Exception):
@@ -332,7 +337,9 @@ def create_upload_url_async(success_path,
                           _get_result_hook, lambda rpc: rpc.response.url())
 
 
-def delete(blob_keys, rpc=None):
+
+
+def delete(blob_keys, rpc=None, _token=None):
   """Delete a blob from Blobstore.
 
   Args:
@@ -343,11 +350,16 @@ def delete(blob_keys, rpc=None):
   Returns:
     None.
   """
-  rpc = delete_async(blob_keys, rpc)
+
+
+
+  rpc = delete_async(blob_keys, rpc, _token)
   return rpc.get_result()
 
 
-def delete_async(blob_keys, rpc=None):
+
+
+def delete_async(blob_keys, rpc=None, _token=None):
   """Delete a blob from Blobstore -- async version.
 
   Args:
@@ -358,11 +370,16 @@ def delete_async(blob_keys, rpc=None):
   Returns:
     A UserRPC whose result will be None.
   """
+
+
+
   if isinstance(blob_keys, (basestring, BlobKey)):
     blob_keys = [blob_keys]
   request = blobstore_service_pb.DeleteBlobRequest()
   for blob_key in blob_keys:
     request.add_blob_key(str(blob_key))
+  if _token:
+    request.set_token(_token)
   response = api_base_pb.VoidProto()
 
   return _make_async_call(rpc, 'DeleteBlob', request, response,
@@ -456,19 +473,14 @@ def fetch_data_async(blob_key, start_index, end_index, rpc=None):
 def create_gs_key(filename, rpc=None):
   """Create an encoded key for a Google Storage file.
 
-  The created blob key will include short lived access token using the
-  application's service account for authorization.
-
-  This blob key should not be stored permanently as the access token will
-  expire.
+  It is safe to persist this key for future use.
 
   Args:
     filename: The filename of the google storage object to create the key for.
     rpc: Optional UserRPC object.
 
   Returns:
-    An encrypted blob key object that also contains a short term access token
-      that represents the application's service account.
+    An encrypted blob key string.
   """
   rpc = create_gs_key_async(filename, rpc)
   return rpc.get_result()
@@ -477,11 +489,7 @@ def create_gs_key(filename, rpc=None):
 def create_gs_key_async(filename, rpc=None):
   """Create an encoded key for a google storage file - async version.
 
-  The created blob key will include short lived access token using the
-  application's service account for authorization.
-
-  This blob key should not be stored permanently as the access token will
-  expire.
+  It is safe to persist this key for future use.
 
   Args:
     filename: The filename of the google storage object to create the
@@ -489,7 +497,7 @@ def create_gs_key_async(filename, rpc=None):
     rpc: Optional UserRPC object.
 
   Returns:
-    A UserRPC whose result will be a str as returned by create_gs_key.
+    A UserRPC whose result will be a string as returned by create_gs_key.
 
   Raises:
     TypeError: If filename is not a string.
@@ -498,7 +506,7 @@ def create_gs_key_async(filename, rpc=None):
 
   if not isinstance(filename, basestring):
     raise TypeError('filename must be str: %s' % filename)
-  if not filename.startswith('/gs/'):
+  if not filename.startswith(GS_PREFIX):
     raise ValueError('filename must start with "/gs/": %s' % filename)
   if not '/' in filename[4:]:
     raise ValueError('filename must have the format '

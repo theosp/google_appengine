@@ -38,6 +38,10 @@ class MultipleConfigurationFile(Error):
   """Tried to load configuration file with multiple objects."""
 
 
+class AmbiguousConfigurationFiles(Error):
+  """Both YAML and XML files exist for the same configuration information."""
+
+
 class UnexpectedAttribute(Error):
   """Raised when an unexpected attribute is encounted."""
 

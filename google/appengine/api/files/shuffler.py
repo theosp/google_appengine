@@ -18,7 +18,12 @@
 
 
 
-"""Files API Shuffler interface"""
+"""Files API.
+
+.. deprecated:: 1.8.1
+   Use Google Cloud Storage Client library instead.
+
+Files API Shuffler interface"""
 
 
 import logging
@@ -104,4 +109,4 @@ def available():
   Returns:
     True if shuffler service is available, False otherwise.
   """
-  return files._get_capabilities().shuffle_available()
+  return False

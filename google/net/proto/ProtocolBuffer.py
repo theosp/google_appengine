@@ -18,12 +18,23 @@
 
 
 
-import struct
 import array
-import string
-import re
-from google.pyglib.gexcept import AbstractMethod
 import httplib
+import re
+import struct
+try:
+
+
+  import google.net.proto.proto1 as proto1
+except ImportError:
+
+  class ProtocolBufferDecodeError(Exception): pass
+  class ProtocolBufferEncodeError(Exception): pass
+  class ProtocolBufferReturnError(Exception): pass
+else:
+  ProtocolBufferDecodeError = proto1.ProtocolBufferDecodeError
+  ProtocolBufferEncodeError = proto1.ProtocolBufferEncodeError
+  ProtocolBufferReturnError = proto1.ProtocolBufferReturnError
 
 __all__ = ['ProtocolMessage', 'Encoder', 'Decoder',
            'ExtendableProtocolMessage',
@@ -33,6 +44,7 @@ __all__ = ['ProtocolMessage', 'Encoder', 'Decoder',
 
 URL_RE = re.compile('^(https?)://([^/]+)(/.*)$')
 
+
 class ProtocolMessage:
 
 
@@ -40,18 +52,18 @@ class ProtocolMessage:
 
 
   def __init__(self, contents=None):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def Clear(self):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def IsInitialized(self, debug_strs=None):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def Encode(self):
     try:
       return self._CEncode()
-    except AbstractMethod:
+    except NotImplementedError:
       e = Encoder()
       self.Output(e)
       return e.buffer().tostring()
@@ -62,16 +74,16 @@ class ProtocolMessage:
   def SerializePartialToString(self):
     try:
       return self._CEncodePartial()
-    except (AbstractMethod, AttributeError):
+    except (NotImplementedError, AttributeError):
       e = Encoder()
       self.OutputPartial(e)
       return e.buffer().tostring()
 
   def _CEncode(self):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def _CEncodePartial(self):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def ParseFromString(self, s):
     self.Clear()
@@ -90,7 +102,7 @@ class ProtocolMessage:
   def MergePartialFromString(self, s):
     try:
       self._CMergeFromString(s)
-    except AbstractMethod:
+    except NotImplementedError:
 
 
       a = array.array('B')
@@ -99,7 +111,7 @@ class ProtocolMessage:
       self.TryMerge(d)
 
   def _CMergeFromString(self, s):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def __getstate__(self):
     return self.Encode()
@@ -145,7 +157,7 @@ class ProtocolMessage:
                             secure=1, keyfile=keyfile, certfile=certfile)
 
   def __str__(self, prefix="", printElemNumber=0):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def ToASCII(self):
     return self._CToASCII(ProtocolMessage._SYMBOLIC_FULL_ASCII)
@@ -163,16 +175,16 @@ class ProtocolMessage:
   _SYMBOLIC_FULL_ASCII = 2
 
   def _CToASCII(self, output_format):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def ParseASCII(self, ascii_string):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def ParseASCIIIgnoreUnknown(self, ascii_string):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def Equals(self, other):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def __eq__(self, other):
 
@@ -206,10 +218,10 @@ class ProtocolMessage:
     return
 
   def OutputUnchecked(self, e):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def OutputPartial(self, e):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def Parse(self, d):
     self.Clear()
@@ -224,7 +236,7 @@ class ProtocolMessage:
     return
 
   def TryMerge(self, d):
-    raise AbstractMethod
+    raise NotImplementedError
 
   def CopyFrom(self, pb):
     if (pb == self): return
@@ -232,7 +244,7 @@ class ProtocolMessage:
     self.MergeFrom(pb)
 
   def MergeFrom(self, pb):
-    raise AbstractMethod
+    raise NotImplementedError
 
 
 
@@ -955,11 +967,7 @@ class ExtendableProtocolMessage(ProtocolMessage):
         extension.number, extension)
     if actual_handle is not extension:
       raise AssertionError(
-          'Extensions "%s" and "%s" both try to extend message type "%s" with'
+          'Extensions "%s" and "%s" both try to extend message type "%s" with '
           'field number %d.' %
           (extension.full_name, actual_handle.full_name,
            cls.__name__, extension.number))
-
-class ProtocolBufferDecodeError(Exception): pass
-class ProtocolBufferEncodeError(Exception): pass
-class ProtocolBufferReturnError(Exception): pass

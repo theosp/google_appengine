@@ -120,10 +120,10 @@ accept several optional keyword arguments:
 - verbose_name=<value>: A human readable name for this property.  This
   human readable name can be used for html form labels.
 
-The repeated, required and default options are mutually exclusive: a
+The repeated and required/default options are mutually exclusive: a
 repeated property cannot be required nor can it specify a default
 value (the default is always an empty list and an empty list is always
-an allowed value), and a required property cannot have a default.
+an allowed value), but a required property can have a default.
 
 Some property types have additional arguments.  Some property types
 do not support all options.
@@ -280,22 +280,24 @@ Property subclass is in the docstring for the Property class.
 
 __author__ = 'guido@google.com (Guido van Rossum)'
 
+import collections
 import copy
 import cPickle as pickle
 import datetime
+import logging
 import zlib
 
+from .google_imports import datastore
 from .google_imports import datastore_errors
-from .google_imports import datastore_types
-from .google_imports import users
 from .google_imports import datastore_query
 from .google_imports import datastore_rpc
+from .google_imports import datastore_types
+from .google_imports import users
 from .google_imports import entity_pb
 
+from . import key as key_module  # NOTE: 'key' is a common local variable name.
 from . import utils
 
-# NOTE: 'key' is a common local variable name.
-from . import key as key_module
 Key = key_module.Key  # For export.
 
 # NOTE: Property and Error classes are added later.
@@ -303,8 +305,9 @@ __all__ = ['Key', 'BlobKey', 'GeoPt', 'Rollback',
            'Index', 'IndexState', 'IndexProperty',
            'ModelAdapter', 'ModelAttribute',
            'ModelKey', 'MetaModel', 'Model', 'Expando',
-           'transaction', 'transaction_async',
-           'in_transaction', 'transactional', 'non_transactional',
+           'transaction', 'transaction_async', 'in_transaction',
+           'transactional', 'transactional_async', 'transactional_tasklet',
+           'non_transactional',
            'get_multi', 'get_multi_async',
            'put_multi', 'put_multi_async',
            'delete_multi', 'delete_multi_async',
@@ -326,8 +329,15 @@ class KindError(datastore_errors.BadValueError):
   """
 
 
-class BadProjectionError(datastore_errors.Error):
-  """Raised when a property name used as a projection is invalid."""
+class InvalidPropertyError(datastore_errors.Error):
+  """Raised when a property is not applicable to a given use.
+
+  For example, a property must exist and be indexed to be used in a query's
+  projection or group by clause.
+  """
+
+# Mapping for legacy support.
+BadProjectionError = InvalidPropertyError
 
 
 class UnprojectedPropertyError(datastore_errors.Error):
@@ -339,7 +349,7 @@ class ReadonlyPropertyError(datastore_errors.Error):
 
 
 class ComputedPropertyError(ReadonlyPropertyError):
-  """Raised when attempting to set a value to a computed property."""
+  """Raised when attempting to set a value to or delete a computed property."""
 
 
 # Various imported limits.
@@ -370,6 +380,107 @@ class _NotEqualMixin(object):
     if eq is NotImplemented:
       return NotImplemented
     return not eq
+
+
+class _NestedCounter(object):
+  """ A recursive counter for StructuredProperty deserialization.
+
+  Deserialization has some complicated rules to handle StructuredPropertys
+  that may or may not be empty. The simplest case is a leaf counter, where
+  the counter will return the index of the repeated value that last had this
+  leaf property written. When a non-leaf counter requested, this will return
+  the max of all its leaf values. This is due to the fact that the next index
+  that a full non-leaf property may be written to comes after all indices that
+  have part of that property written (otherwise, a partial entity would be
+  overwritten.
+
+  Consider an evaluation of the following structure:
+    class B(model.Model):
+      c = model.IntegerProperty()
+      d = model.IntegerProperty()
+
+    class A(model.Model):
+      b = model.StructuredProperty(B)
+
+    class Foo(model.Model):
+      # top-level model
+      a = model.StructuredProperty(A, repeated=True)
+
+    Foo(a=[A(b=None),
+           A(b=B(c=1)),
+           A(b=None),
+           A(b=B(c=2, d=3))])
+
+  This will result in a serialized structure:
+
+  1) a.b   = None
+  2) a.b.c = 1
+  3) a.b.d = None
+  4) a.b   = None
+  5) a.b.c = 2
+  6) a.b.d = 3
+
+  The counter state should be the following:
+     a | a.b | a.b.c | a.b.d
+  0) -    -      -       -
+  1) @1   1      -       -
+  2) @2   @2     2       -
+  3) @2   @2     2       2
+  4) @3   @3     3       3
+  5) @4   @4     4       3
+  6) @4   @4     4       4
+
+  Here, @ indicates that this counter value is actually a calculated value.
+  It is equal to the MAX of its sub-counters.
+
+  Counter values may get incremented multiple times while deserializing a
+  property. This will happen if a child counter falls behind,
+  for example in steps 2 and 3.
+
+  During an increment of a parent node, all child nodes values are incremented
+  to match that of the parent, for example in step 4.
+  """
+
+  def __init__(self):
+    self.__counter = 0
+    self.__sub_counters = collections.defaultdict(_NestedCounter)
+
+  def get(self, parts=None):
+    if parts:
+      return self.__sub_counters[parts[0]].get(parts[1:])
+    if self.__is_parent_node():
+      return max(v.get() for v in self.__sub_counters.itervalues())
+    return self.__counter
+
+  def increment(self, parts=None):
+    if parts:
+      self.__make_parent_node()
+      return self.__sub_counters[parts[0]].increment(parts[1:])
+    if self.__is_parent_node():
+      # Move all children forward
+      value = self.get() + 1
+      self._set(value)
+      return value
+    self.__counter += 1
+    return self.__counter
+
+  def _set(self, value):
+    """Updates all descendants to a specified value."""
+    if self.__is_parent_node():
+      for child in self.__sub_counters.itervalues():
+        child._set(value)
+    else:
+      self.__counter = value
+
+  def _absolute_counter(self):
+    # Used only for testing.
+    return self.__counter
+
+  def __is_parent_node(self):
+    return self.__counter == -1
+
+  def __make_parent_node(self):
+    self.__counter = -1
 
 
 class IndexProperty(_NotEqualMixin):
@@ -547,11 +658,7 @@ class ModelAdapter(datastore_rpc.AbstractAdapter):
     if pb.key().path().element_size():
       key = Key(reference=pb.key())
       kind = key.kind()
-    modelclass = Model._kind_map.get(kind, self.default_model)
-    if modelclass is None:
-      raise KindError(
-        "No model class found for kind '%s'. Did you forget to import it?" %
-        kind)
+    modelclass = Model._lookup_model(kind, self.default_model)
     entity = modelclass._from_pb(pb, key=key, set_key=False)
     if self.want_pbs:
       entity._orig_pb = pb
@@ -775,10 +882,8 @@ class Property(ModelAttribute):
       self._default = default
     if verbose_name is not None:
       self._verbose_name = verbose_name
-    if (bool(self._repeated) +
-        bool(self._required) +
-        (self._default is not None)) > 1:
-      raise ValueError('repeated, required and default are mutally exclusive.')
+    if self._repeated and (self._required or self._default is not None):
+      raise ValueError('repeated is incompatible with required or default')
     if choices is not None:
       if not isinstance(choices, (list, tuple, set, frozenset)):
         raise TypeError('choices must be a list, tuple or set; received %r' %
@@ -1243,8 +1348,9 @@ class Property(ModelAttribute):
 
     This returns False if a value is stored but it is None.
     """
-    return not self._required or (self._has_value(entity) and
-                                  self._get_value(entity) is not None)
+    return (not self._required or
+            ((self._has_value(entity) or self._default is not None) and
+             self._get_value(entity) is not None))
 
   def __get__(self, entity, unused_cls=None):
     """Descriptor protocol: get the value from the entity."""
@@ -1260,7 +1366,8 @@ class Property(ModelAttribute):
     """Descriptor protocol: delete the value from the entity."""
     self._delete_value(entity)
 
-  def _serialize(self, entity, pb, prefix='', parent_repeated=False):
+  def _serialize(self, entity, pb, prefix='', parent_repeated=False,
+                 projection=None):
     """Internal helper to serialize this property to a protocol buffer.
 
     Subclasses may override this method.
@@ -1272,18 +1379,32 @@ class Property(ModelAttribute):
         (if present, must end in '.').
       parent_repeated: True if the parent (or an earlier ancestor)
         is a repeated Property.
+      projection: A list or tuple of strings representing the projection for
+        the model instance, or None if the instance is not a projection.
     """
     values = self._get_base_value_unwrapped_as_list(entity)
     for val in values:
+      name = prefix + self._name
+      if projection and name not in projection:
+        continue
       if self._indexed:
         p = pb.add_property()
       else:
         p = pb.add_raw_property()
-      p.set_name(prefix + self._name)
+      p.set_name(name)
       p.set_multiple(self._repeated or parent_repeated)
       v = p.mutable_value()
       if val is not None:
         self._db_set_value(v, p, val)
+        if projection:
+          # Projected properties have the INDEX_VALUE meaning and only contain
+          # the original property's name and value.
+          new_p = entity_pb.Property()
+          new_p.set_name(p.name())
+          new_p.set_meaning(entity_pb.Property.INDEX_VALUE)
+          new_p.set_multiple(False)
+          new_p.mutable_value().CopyFrom(v)
+          p.CopyFrom(new_p)
 
   def _deserialize(self, entity, p, unused_depth=1):
     """Internal helper to deserialize this property from a protocol buffer.
@@ -1314,24 +1435,25 @@ class Property(ModelAttribute):
   def _prepare_for_put(self, entity):
     pass
 
-  def _check_projection(self, rest=None):
-    """Helper to check whether this property can be used as a projection.
+  def _check_property(self, rest=None, require_indexed=True):
+    """Internal helper to check this property for specific requirements.
+
+    Called by Model._check_properties().
 
     Args:
       rest: Optional subproperty to check, of the form 'name1.name2...nameN'.
 
     Raises:
-      BadProjectionError if this property is not indexed or if a
-      subproperty is specified.  (StructuredProperty overrides this
-      method to handle subprpoperties.)
+      InvalidPropertyError if this property does not meet the given
+      requirements or if a subproperty is specified.  (StructuredProperty
+      overrides this method to handle subproperties.)
     """
-    if not self._indexed:
-      raise BadProjectionError('Projecting on unindexed property %s' %
-                               self._name)
+    if require_indexed and not self._indexed:
+      raise InvalidPropertyError('Property is unindexed %s' % self._name)
     if rest:
-      raise BadProjectionError('Projecting on subproperty %s.%s '
-                               'but %s is not a structured property' %
-                               (self._name, rest, self._name))
+      raise InvalidPropertyError('Referencing subproperty %s.%s '
+                                 'but %s is not a structured property' %
+                                 (self._name, rest, self._name))
 
   def _get_for_dict(self, entity):
     """Retrieve the value like _get_value(), processed for _to_dict().
@@ -1339,6 +1461,16 @@ class Property(ModelAttribute):
     Property subclasses can override this if they want the dictionary
     returned by entity._to_dict() to contain a different value.  The
     main use case is StructuredProperty and LocalStructuredProperty.
+
+    NOTES:
+
+    - If you override _get_for_dict() to return a different type, you
+      must override _validate() to accept values of that type and
+      convert them back to the original type.
+
+    - If you override _get_for_dict(), you must handle repeated values
+      and None correctly.  (See _StructuredGetForDictMixin for an
+      example.)  However, _validate() does not need to handle these.
     """
     return self._get_value(entity)
 
@@ -1621,10 +1753,11 @@ class GeoPtProperty(Property):
       raise datastore_errors.BadValueError('Expected GeoPt, got %r' %
                                            (value,))
 
-  def _db_set_value(self, v, unused_p, value):
+  def _db_set_value(self, v, p, value):
     if not isinstance(value, GeoPt):
       raise TypeError('GeoPtProperty %s can only be set to GeoPt values; '
                       'received %r' % (self._name, value))
+    p.set_meaning(entity_pb.Property.GEORSS_POINT)
     pv = v.mutable_pointvalue()
     pv.set_x(value.lat)
     pv.set_y(value.lon)
@@ -1668,6 +1801,17 @@ class PickleProperty(BlobProperty):
 
 class JsonProperty(BlobProperty):
   """A property whose value is any Json-encodable Python object."""
+
+  _json_type = None
+
+  @utils.positional(1 + BlobProperty._positional)
+  def __init__(self, name=None, compressed=False, json_type=None, **kwds):
+    super(JsonProperty, self).__init__(name=name, compressed=compressed, **kwds)
+    self._json_type = json_type
+
+  def _validate(self, value):
+    if self._json_type is not None and not isinstance(value, self._json_type):
+      raise TypeError('JSON property must be a %s' % self._json_type)
 
   # Use late import so the dependency is optional.
 
@@ -1900,7 +2044,7 @@ class DateTimeProperty(Property):
                                            (value,))
 
   def _now(self):
-    return datetime.datetime.now()
+    return datetime.datetime.utcnow()
 
   def _prepare_for_put(self, entity):
     if (self._auto_now or
@@ -1977,7 +2121,7 @@ class DateProperty(DateTimeProperty):
     return value.date()
 
   def _now(self):
-    return datetime.date.today()
+    return datetime.datetime.utcnow().date()
 
 
 class TimeProperty(DateTimeProperty):
@@ -1997,7 +2141,7 @@ class TimeProperty(DateTimeProperty):
     return value.time()
 
   def _now(self):
-    return datetime.datetime.now().time()
+    return datetime.datetime.utcnow().time()
 
 
 class _StructuredGetForDictMixin(Property):
@@ -2006,6 +2150,13 @@ class _StructuredGetForDictMixin(Property):
   The behavior here is that sub-entities are converted to dictionaries
   by calling to_dict() on them (also doing the right thing for
   repeated properties).
+
+  NOTE: Even though the _validate() method in StructuredProperty and
+  LocalStructuredProperty are identical, they cannot be moved into
+  this shared base class.  The reason is subtle: _validate() is not a
+  regular method, but treated specially by _call_to_base_type() and
+  _call_shallow_validation(), and the class where it occurs matters
+  if it also defines _to_base_type().
   """
 
   def _get_for_dict(self, entity):
@@ -2134,6 +2285,9 @@ class StructuredProperty(_StructuredGetForDictMixin):
   IN = _IN
 
   def _validate(self, value):
+    if isinstance(value, dict):
+      # A dict is assumed to be the result of a _to_dict() call.
+      return self._modelclass(**value)
     if not isinstance(value, self._modelclass):
       raise datastore_errors.BadValueError('Expected %s instance, got %r' %
                                            (self._modelclass.__name__, value))
@@ -2163,7 +2317,8 @@ class StructuredProperty(_StructuredGetForDictMixin):
         ok = subprop._has_value(subent, rest[1:])
     return ok
 
-  def _serialize(self, entity, pb, prefix='', parent_repeated=False):
+  def _serialize(self, entity, pb, prefix='', parent_repeated=False,
+                 projection=None):
     # entity -> pb; pb is an EntityProto message
     values = self._get_base_value_unwrapped_as_list(entity)
     for value in values:
@@ -2171,11 +2326,13 @@ class StructuredProperty(_StructuredGetForDictMixin):
         # TODO: Avoid re-sorting for repeated values.
         for unused_name, prop in sorted(value._properties.iteritems()):
           prop._serialize(value, pb, prefix + self._name + '.',
-                          self._repeated or parent_repeated)
+                          self._repeated or parent_repeated,
+                          projection=projection)
       else:
         # Serialize a single None
         super(StructuredProperty, self)._serialize(
-          entity, pb, prefix=prefix, parent_repeated=parent_repeated)
+          entity, pb, prefix=prefix, parent_repeated=parent_repeated,
+          projection=projection)
 
   def _deserialize(self, entity, p, depth=1):
     if not self._repeated:
@@ -2211,27 +2368,63 @@ class StructuredProperty(_StructuredGetForDictMixin):
     next = parts[depth]
     rest = parts[depth + 1:]
     prop = self._modelclass._properties.get(next)
+    prop_is_fake = False
     if prop is None:
-      raise RuntimeError('Unable to find property %s of StructuredProperty %s.'
-                         % (next, self._name))
+      # Synthesize a fake property.  (We can't use Model._fake_property()
+      # because we need the property before we can determine the subentity.)
+      if rest:
+        # TODO: Handle this case, too.
+        logging.warn('Skipping unknown structured subproperty (%s) '
+                     'in repeated structured property (%s of %s)',
+                     name, self._name, entity.__class__.__name__)
+        return
+      # TODO: Figure out the value for indexed.  Unfortunately we'd
+      # need this passed in from _from_pb(), which would mean a
+      # signature change for _deserialize(), which might break valid
+      # end-user code that overrides it.
+      compressed = p.meaning_uri() == _MEANING_URI_COMPRESSED
+      prop = GenericProperty(next, compressed=compressed)
+      prop._code_name = next
+      prop_is_fake = True
 
-    values = self._get_base_value_unwrapped_as_list(entity)
     # Find the first subentity that doesn't have a value for this
     # property yet.
-    for sub in values:
-      if not isinstance(sub, self._modelclass):
-        raise TypeError('sub-entities must be instances of their Model class.')
-      if not prop._has_value(sub, rest):
-        subentity = sub
-        break
-    else:
+    if not hasattr(entity, '_subentity_counter'):
+      entity._subentity_counter = _NestedCounter()
+    counter = entity._subentity_counter
+    counter_path = parts[depth - 1:]
+    next_index = counter.get(counter_path)
+    subentity = None
+    if self._has_value(entity):
+      # If an entire subentity has been set to None, we have to loop
+      # to advance until we find the next partial entity.
+      while (next_index < self._get_value_size(entity)):
+        subentity = self._get_base_value_at_index(entity, next_index)
+        if not isinstance(subentity, self._modelclass):
+          raise TypeError('sub-entities must be instances '
+                          'of their Model class.')
+        if not prop._has_value(subentity, rest):
+          break
+        next_index = counter.increment(counter_path)
+      else:
+        subentity = None
+    # The current property is going to be populated, so advance the counter.
+    counter.increment(counter_path)
+    if not subentity:
       # We didn't find one.  Add a new one to the underlying list of
-      # values (the list returned by
-      # _get_base_value_unwrapped_as_list() is a copy so we
-      # can't append to it).
+      # values.
       subentity = self._modelclass()
-      values = self._retrieve_value(entity)
+      values = self._retrieve_value(entity, self._default)
+      if values is None:
+        self._store_value(entity, [])
+        values = self._retrieve_value(entity, self._default)
       values.append(_BaseValue(subentity))
+    if prop_is_fake:
+      # Add the synthetic property to the subentity's _properties
+      # dict, so that it will be correctly deserialized.
+      # (See Model._fake_property() for comparison.)
+      subentity._clone_properties()
+      subentity._properties[prop._name] = prop
     prop._deserialize(subentity, p, depth + 1)
 
   def _prepare_for_put(self, entity):
@@ -2240,19 +2433,29 @@ class StructuredProperty(_StructuredGetForDictMixin):
       if value is not None:
         value._prepare_for_put()
 
-  def _check_projection(self, rest=None):
-    """Override for Model._check_projection().
+  def _check_property(self, rest=None, require_indexed=True):
+    """Override for Property._check_property().
 
     Raises:
-      BadProjectionError if no subproperty is specified or if something
+      InvalidPropertyError if no subproperty is specified or if something
       is wrong with the subproperty.
     """
     if not rest:
-      raise BadProjectionError('Projecting on structured property %s '
-                               'requires a subproperty' %
-                               self._name)
-    self._modelclass._check_projections([rest])
+      raise InvalidPropertyError(
+        'Structured property %s requires a subproperty' % self._name)
+    self._modelclass._check_properties([rest], require_indexed=require_indexed)
 
+  def _get_base_value_at_index(self, entity, index):
+    assert self._repeated
+    value = self._retrieve_value(entity, self._default)
+    value[index] = self._opt_call_to_base_type(value[index])
+    return value[index].b_val
+
+  def _get_value_size(self, entity):
+    values = self._retrieve_value(entity, self._default)
+    if values is None:
+      return 0
+    return len(values)
 
 class LocalStructuredProperty(_StructuredGetForDictMixin, BlobProperty):
   """Substructure that is serialized to an opaque blob.
@@ -2286,6 +2489,9 @@ class LocalStructuredProperty(_StructuredGetForDictMixin, BlobProperty):
     self._keep_keys = keep_keys
 
   def _validate(self, value):
+    if isinstance(value, dict):
+      # A dict is assumed to be the result of a _to_dict() call.
+      return self._modelclass(**value)
     if not isinstance(value, self._modelclass):
       raise datastore_errors.BadValueError('Expected %s instance, got %r' %
                                            (self._modelclass.__name__, value))
@@ -2312,7 +2518,8 @@ class LocalStructuredProperty(_StructuredGetForDictMixin, BlobProperty):
     if value is not None:
       if self._repeated:
         for subent in value:
-          subent._prepare_for_put()
+          if subent is not None:
+            subent._prepare_for_put()
       else:
         value._prepare_for_put()
 
@@ -2460,6 +2667,7 @@ class GenericProperty(Property):
       v.set_int64value(ival)
       p.set_meaning(entity_pb.Property.GD_WHEN)
     elif isinstance(value, GeoPt):
+      p.set_meaning(entity_pb.Property.GEORSS_POINT)
       pv = v.mutable_pointvalue()
       pv.set_x(value.lat)
       pv.set_y(value.lon)
@@ -2514,7 +2722,8 @@ class ComputedProperty(GenericProperty):
   ...   hash = ComputedProperty(_compute_hash, name='sha1')
   """
 
-  def __init__(self, func, name=None, indexed=None, repeated=None):
+  def __init__(self, func, name=None, indexed=None,
+               repeated=None, verbose_name=None):
     """Constructor.
 
     Args:
@@ -2522,11 +2731,15 @@ class ComputedProperty(GenericProperty):
             a calculated value.
     """
     super(ComputedProperty, self).__init__(name=name, indexed=indexed,
-                                           repeated=repeated)
+                                           repeated=repeated,
+                                           verbose_name=verbose_name)
     self._func = func
 
   def _set_value(self, entity, value):
     raise ComputedPropertyError("Cannot assign to a ComputedProperty")
+
+  def _delete_value(self, entity):
+    raise ComputedPropertyError("Cannot delete a ComputedProperty")
 
   def _get_value(self, entity):
     # About projections and computed properties: if the computed
@@ -2632,6 +2845,10 @@ class Model(_NotEqualMixin):
     through the constructor, but can be assigned to entity attributes
     after the entity has been created.
     """
+    if len(args) > 1:
+      raise TypeError('Model constructor takes no positional arguments.')
+    # self is passed implicitly through args so users can define a property
+    # named 'self'.
     (self,) = args
     get_arg = self.__get_arg
     key = get_arg(kwds, 'key')
@@ -2655,11 +2872,11 @@ class Model(_NotEqualMixin):
     self._set_attributes(kwds)
     # Set the projection last, otherwise it will prevent _set_attributes().
     if projection:
-      self._projection = tuple(projection)
+      self._set_projection(projection)
 
   @classmethod
   def __get_arg(cls, kwds, kwd):
-    """Helper method to parse keywords that may be property names."""
+    """Internal helper method to parse keywords that may be property names."""
     alt_kwd = '_' + kwd
     if alt_kwd in kwds:
       return kwds.pop(alt_kwd)
@@ -2758,6 +2975,27 @@ class Model(_NotEqualMixin):
     return cls.__name__
 
   @classmethod
+  def _class_name(cls):
+    """A hook for polymodel to override.
+
+    For regular models and expandos this is just an alias for
+    _get_kind().  For PolyModel subclasses, it returns the class name
+    (as set in the 'class' attribute thereof), whereas _get_kind()
+    returns the kind (the class name of the root class of a specific
+    PolyModel hierarchy).
+    """
+    return cls._get_kind()
+
+  @classmethod
+  def _default_filters(cls):
+    """Return an iterable of filters that are always to be applied.
+
+    This is used by PolyModel to quietly insert a filter for the
+    current class name.
+    """
+    return ()
+
+  @classmethod
   def _reset_kind_map(cls):
     """Clear the kind map.  Useful for testing."""
     # Preserve "system" kinds, like __namespace__
@@ -2768,9 +3006,30 @@ class Model(_NotEqualMixin):
     cls._kind_map.clear()
     cls._kind_map.update(keep)
 
+  @classmethod
+  def _lookup_model(cls, kind, default_model=None):
+    """Get the model class for the kind.
+
+    Args:
+      kind: A string representing the name of the kind to lookup.
+      default_model: The model class to use if the kind can't be found.
+
+    Returns:
+      The model class for the requested kind.
+    Raises:
+      KindError: The kind was not found and no default_model was provided.
+    """
+    modelclass = cls._kind_map.get(kind, default_model)
+    if modelclass is None:
+      raise KindError(
+          "No model class found for kind '%s'. Did you forget to import it?" %
+          kind)
+    return modelclass
+
   def _has_complete_key(self):
     """Return whether this entity has a complete key."""
     return self._key is not None and self._key.id() is not None
+  has_complete_key = _has_complete_key
 
   def __hash__(self):
     """Dummy hash function.
@@ -2798,7 +3057,7 @@ class Model(_NotEqualMixin):
       raise NotImplementedError('Cannot compare different model classes. '
                                 '%s is not %s' % (self.__class__.__name__,
                                                   other.__class_.__name__))
-    if self._projection != other._projection:
+    if set(self._projection) != set(other._projection):
       return False
     # It's all about determining inequality early.
     if len(self._properties) != len(other._properties):
@@ -2830,7 +3089,7 @@ class Model(_NotEqualMixin):
       self._key_to_pb(pb)
 
     for unused_name, prop in sorted(self._properties.iteritems()):
-      prop._serialize(self, pb)
+      prop._serialize(self, pb, projection=self._projection)
 
     return pb
 
@@ -2880,7 +3139,6 @@ class Model(_NotEqualMixin):
     return ent
 
   def _set_projection(self, projection):
-    self._projection = tuple(projection)
     by_prefix = {}
     for propname in projection:
       if '.' in propname:
@@ -2889,10 +3147,12 @@ class Model(_NotEqualMixin):
           by_prefix[head].append(tail)
         else:
           by_prefix[head] = [tail]
+    self._projection = tuple(projection)
     for propname, proj in by_prefix.iteritems():
       prop = self._properties.get(propname)
       subval = prop._get_base_value_unwrapped_as_list(self)
       for item in subval:
+        assert item is not None
         item._set_projection(proj)
 
   def _get_property_for(self, p, indexed=True, depth=0):
@@ -3013,22 +3273,23 @@ class Model(_NotEqualMixin):
         prop._prepare_for_put(self)
 
   @classmethod
-  def _check_projections(cls, projections):
-    """Helper to check that a list of projections is valid for this class.
+  def _check_properties(cls, property_names, require_indexed=True):
+    """Internal helper to check the given properties exist and meet specified
+    requirements.
 
     Called from query.py.
 
     Args:
-      projections: List or tuple of projections -- each being a string
-        giving a property name, possibly containing dots (to address
-        subproperties of structured properties).
+      property_names: List or tuple of property names -- each being a string,
+        possibly containing dots (to address subproperties of structured
+        properties).
 
     Raises:
-      BadProjectionError if one of the properties is invalid.
+      InvalidPropertyError if one of the properties is invalid.
       AssertionError if the argument is not a list or tuple of strings.
     """
-    assert isinstance(projections, (list, tuple)), repr(projections)
-    for name in projections:
+    assert isinstance(property_names, (list, tuple)), repr(property_names)
+    for name in property_names:
       assert isinstance(name, basestring), repr(name)
       if '.' in name:
         name, rest = name.split('.', 1)
@@ -3036,21 +3297,21 @@ class Model(_NotEqualMixin):
         rest = None
       prop = cls._properties.get(name)
       if prop is None:
-        cls._unknown_projection(name)
+        cls._unknown_property(name)
       else:
-        prop._check_projection(rest)
+        prop._check_property(rest, require_indexed=require_indexed)
 
   @classmethod
-  def _unknown_projection(cls, name):
-    """Helper to raise an exception for an unknown property name.
+  def _unknown_property(cls, name):
+    """Internal helper to raise an exception for an unknown property name.
 
-    This is called by _check_projections().  It is overridden by
+    This is called by _check_properties().  It is overridden by
     Expando, where this is a no-op.
 
     Raises:
-      BadProjectionError.
+      InvalidPropertyError.
     """
-    raise BadProjectionError('Projecting on unknown property %s' % name)
+    raise InvalidPropertyError('Unknown property %s' % name)
 
   def _validate_key(self, key):
     """Validation for _key attribute (designed to be overridden).
@@ -3070,18 +3331,31 @@ class Model(_NotEqualMixin):
   def _query(cls, *args, **kwds):
     """Create a Query object for this class.
 
-    Keyword arguments are passed to the Query() constructor.  If
-    positional arguments are given they are used to apply an initial
-    filter.
+    Args:
+      distinct: Optional bool, short hand for group_by = projection.
+      *args: Used to apply an initial filter
+      **kwds: are passed to the Query() constructor.
 
     Returns:
       A Query object.
     """
+    # Validating distinct.
+    if 'distinct' in kwds:
+      if 'group_by' in kwds:
+        raise TypeError(
+            'cannot use distinct= and group_by= at the same time')
+      projection = kwds.get('projection')
+      if not projection:
+        raise TypeError(
+            'cannot use distinct= without projection=')
+      if kwds.pop('distinct'):
+        kwds['group_by'] = projection
+
     # TODO: Disallow non-empty args and filter=.
     from .query import Query  # Import late to avoid circular imports.
     qry = Query(kind=cls._get_kind(), **kwds)
-    if args:
-      qry = qry.filter(*args)
+    qry = qry.filter(*cls._default_filters())
+    qry = qry.filter(*args)
     return qry
   query = _query
 
@@ -3089,7 +3363,7 @@ class Model(_NotEqualMixin):
   def _gql(cls, query_string, *args, **kwds):
     """Run a GQL query."""
     from .query import gql  # Import late to avoid circular imports.
-    return gql('SELECT * FROM %s %s' % (cls._get_kind(), query_string),
+    return gql('SELECT * FROM %s %s' % (cls._class_name(), query_string),
                *args, **kwds)
   gql = _gql
 
@@ -3353,8 +3627,8 @@ class Expando(Model):
       setattr(self, name, value)
 
   @classmethod
-  def _unknown_projection(cls, name):
-    # It is not an error to project on an unknown Expando property.
+  def _unknown_property(cls, name):
+    # It is not an error as the property may be a dynamic property.
     pass
 
   def __getattr__(self, name):
@@ -3373,6 +3647,8 @@ class Expando(Model):
     self._clone_properties()
     if isinstance(value, Model):
       prop = StructuredProperty(Model, name)
+    elif isinstance(value, dict):
+      prop = StructuredProperty(Expando, name)
     else:
       repeated = isinstance(value, list)
       indexed = self._default_indexed
@@ -3458,12 +3734,11 @@ def in_transaction():
   return tasklets.get_context().in_transaction()
 
 
-@utils.positional(1)
-def transactional(_func=None, **ctx_options):
+@utils.decorator
+def transactional(func, args, kwds, **options):
   """Decorator to make a function automatically run in a transaction.
 
   Args:
-    _func: Do not use.
     **ctx_options: Transaction options (see transaction(), but propagation
       default to TransactionOptions.ALLOWED).
 
@@ -3479,37 +3754,38 @@ def transactional(_func=None, **ctx_options):
       def callback(arg):
         ...
   """
-  if _func is not None:
-    # Form (1), vanilla.
-    if ctx_options:
-      raise TypeError('@transactional() does not take positional arguments')
-    # TODO: Avoid recursion, call outer_transactional_wrapper() directly?
-    return transactional()(_func)
-
-  ctx_options.setdefault('propagation',
-                         datastore_rpc.TransactionOptions.ALLOWED)
-
-  # Form (2), with options.
-  def outer_transactional_wrapper(func):
-    @utils.wrapping(func)
-    def inner_transactional_wrapper(*args, **kwds):
-      f = func
-      if args or kwds:
-        f = lambda: func(*args, **kwds)
-      return transaction(f, **ctx_options)
-    return inner_transactional_wrapper
-  return outer_transactional_wrapper
+  return transactional_async.wrapped_decorator(
+      func, args, kwds, **options).get_result()
 
 
-@utils.positional(1)
-def non_transactional(_func=None, allow_existing=True):
+@utils.decorator
+def transactional_async(func, args, kwds, **options):
+  """The async version of @ndb.transaction."""
+  options.setdefault('propagation', datastore_rpc.TransactionOptions.ALLOWED)
+  if args or kwds:
+    return transaction_async(lambda: func(*args, **kwds), **options)
+  return transaction_async(func, **options)
+
+
+@utils.decorator
+def transactional_tasklet(func, args, kwds, **options):
+  """The async version of @ndb.transaction.
+
+  Will return the result of the wrapped function as a Future.
+  """
+  from . import tasklets
+  func = tasklets.tasklet(func)
+  return transactional_async.wrapped_decorator(func, args, kwds, **options)
+
+
+@utils.decorator
+def non_transactional(func, args, kwds, allow_existing=True):
   """A decorator that ensures a function is run outside a transaction.
 
   If there is an existing transaction (and allow_existing=True), the
   existing transaction is paused while the function is executed.
 
   Args:
-    _func: Do not use.
     allow_existing: If false, throw an exception if called from within
       a transaction.  If true, temporarily re-establish the
       previous non-transactional context.  Defaults to True.
@@ -3520,33 +3796,28 @@ def non_transactional(_func=None, allow_existing=True):
     A wrapper for the decorated function that ensures it runs outside a
     transaction.
   """
-  if _func is not None:
-    # TODO: Avoid recursion, call outer_non_transactional_wrapper() directly?
-    return non_transactional()(_func)
-
-  def outer_non_transactional_wrapper(func):
-    from . import tasklets
-    @utils.wrapping(func)
-    def inner_non_transactional_wrapper(*args, **kwds):
-      ctx = tasklets.get_context()
-      if not ctx.in_transaction():
-        return func(*args, **kwds)
-      if not allow_existing:
-        raise datastore_errors.BadRequestError(
-          '%s cannot be called within a transaction.' % func.__name__)
-      save_ctx = ctx
-      while ctx.in_transaction():
-        ctx = ctx._parent_context
-        if ctx is None:
-          raise datastore_errors.BadRequestError(
-            'Context without non-transactional ancestor')
-      try:
-        tasklets.set_context(ctx)
-        return func(*args, **kwds)
-      finally:
-        tasklets.set_context(save_ctx)
-    return inner_non_transactional_wrapper
-  return outer_non_transactional_wrapper
+  from . import tasklets
+  ctx = tasklets.get_context()
+  if not ctx.in_transaction():
+    return func(*args, **kwds)
+  if not allow_existing:
+    raise datastore_errors.BadRequestError(
+      '%s cannot be called within a transaction.' % func.__name__)
+  save_ctx = ctx
+  while ctx.in_transaction():
+    ctx = ctx._parent_context
+    if ctx is None:
+      raise datastore_errors.BadRequestError(
+        'Context without non-transactional ancestor')
+  save_ds_conn = datastore._GetConnection()
+  try:
+    if hasattr(save_ctx, '_old_ds_conn'):
+      datastore._SetConnection(save_ctx._old_ds_conn)
+    tasklets.set_context(ctx)
+    return func(*args, **kwds)
+  finally:
+    tasklets.set_context(save_ctx)
+    datastore._SetConnection(save_ds_conn)
 
 
 def get_multi_async(keys, **ctx_options):

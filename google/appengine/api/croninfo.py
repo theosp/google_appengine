@@ -49,7 +49,7 @@ from google.appengine.api import yaml_object
 
 _URL_REGEX = r'^/.*$'
 _TIMEZONE_REGEX = r'^.{0,100}$'
-_DESCRIPTION_REGEX = r'^.{0,499}$'
+_DESCRIPTION_REGEX = ur'^.{0,499}$'
 
 
 SERVER_ID_RE_STRING = r'(?!-)[a-z\d\-]{1,63}'
@@ -138,6 +138,7 @@ class CronEntry(validation.Validated):
 class CronInfoExternal(validation.Validated):
   """CronInfoExternal describes all cron entries for an application."""
   ATTRIBUTES = {
+      appinfo.APPLICATION: validation.Optional(appinfo.APPLICATION_RE_STRING),
       CRON: validation.Optional(validation.Repeated(CronEntry))
   }
 

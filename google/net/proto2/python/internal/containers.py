@@ -16,8 +16,6 @@
 #
 
 
-
-
 """Contains container classes to represent different protocol buffer types.
 
 This file defines container classes which represent categories of protocol
@@ -97,15 +95,13 @@ class RepeatedScalarFieldContainer(BaseContainer):
 
   def append(self, value):
     """Appends an item to the list. Similar to list.append()."""
-    self._type_checker.CheckValue(value)
-    self._values.append(value)
+    self._values.append(self._type_checker.CheckValue(value))
     if not self._message_listener.dirty:
       self._message_listener.Modified()
 
   def insert(self, key, value):
     """Inserts the item at the specified position. Similar to list.insert()."""
-    self._type_checker.CheckValue(value)
-    self._values.insert(key, value)
+    self._values.insert(key, self._type_checker.CheckValue(value))
     if not self._message_listener.dirty:
       self._message_listener.Modified()
 
@@ -116,8 +112,7 @@ class RepeatedScalarFieldContainer(BaseContainer):
 
     new_values = []
     for elem in elem_seq:
-      self._type_checker.CheckValue(elem)
-      new_values.append(elem)
+      new_values.append(self._type_checker.CheckValue(elem))
     self._values.extend(new_values)
     self._message_listener.Modified()
 
@@ -135,9 +130,13 @@ class RepeatedScalarFieldContainer(BaseContainer):
 
   def __setitem__(self, key, value):
     """Sets the item on the specified position."""
-    self._type_checker.CheckValue(value)
-    self._values[key] = value
-    self._message_listener.Modified()
+    if isinstance(key, slice):
+      if key.step is not None:
+        raise ValueError('Extended slices not supported')
+      self.__setslice__(key.start, key.stop, value)
+    else:
+      self._values[key] = self._type_checker.CheckValue(value)
+      self._message_listener.Modified()
 
   def __getslice__(self, start, stop):
     """Retrieves the subset of items from between the specified indices."""
@@ -147,8 +146,7 @@ class RepeatedScalarFieldContainer(BaseContainer):
     """Sets the subset of items from between the specified indices."""
     new_values = []
     for value in values:
-      self._type_checker.CheckValue(value)
-      new_values.append(value)
+      new_values.append(self._type_checker.CheckValue(value))
     self._values[start:stop] = new_values
     self._message_listener.Modified()
 

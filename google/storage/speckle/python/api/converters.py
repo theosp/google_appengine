@@ -55,6 +55,7 @@ Decoder
 
 
 import datetime
+import decimal
 import functools
 import types
 
@@ -78,6 +79,11 @@ def SwallowArgs(func):
 @SwallowArgs
 def Any2Str(arg):
   return str(arg)
+
+
+
+
+Thing2Literal = Any2Str
 
 
 @SwallowArgs
@@ -153,6 +159,7 @@ conversions = {
     datetime.datetime: Datetime2Str,
     datetime.time: Time2Str,
     Blob: Any2Str,
+    decimal.Decimal: Any2Str,
 
 
     jdbc_type.BIT: int,
@@ -163,7 +170,7 @@ conversions = {
     jdbc_type.REAL: float,
     jdbc_type.DOUBLE: float,
     jdbc_type.NUMERIC: float,
-    jdbc_type.DECIMAL: float,
+    jdbc_type.DECIMAL: decimal.Decimal,
     jdbc_type.FLOAT: float,
     jdbc_type.CHAR: Str2Unicode,
     jdbc_type.VARCHAR: Str2Unicode,

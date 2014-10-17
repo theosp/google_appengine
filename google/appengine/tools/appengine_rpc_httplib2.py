@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-
-
 """Library with a variant of appengine_rpc using httplib2.
 
 The httplib2 module offers some of the features in appengine_rpc, with
@@ -31,15 +27,16 @@ import cStringIO
 import logging
 import os
 import re
+import types
 import urllib
 import urllib2
-
 
 import httplib2
 
 from oauth2client import client
 from oauth2client import file as oauth2client_file
 from oauth2client import tools
+from google.appengine.tools.value_mixin import ValueMixin
 
 logger = logging.getLogger('google.appengine.tools.appengine_rpc')
 
@@ -93,7 +90,7 @@ class HttpRpcServerHttpLib2(object):
   def __init__(self, host, auth_function, user_agent, source,
                host_override=None, extra_headers=None, save_cookies=False,
                auth_tries=None, account_type=None, debug_data=True, secure=True,
-               rpc_tries=3):
+               ignore_certs=False, rpc_tries=3):
     """Creates a new HttpRpcServerHttpLib2.
 
     Args:
@@ -110,6 +107,7 @@ class HttpRpcServerHttpLib2(object):
       account_type: Saved but ignored; may be used by subclasses.
       debug_data: Whether debugging output should include data contents.
       secure: If the requests sent using Send should be sent over HTTPS.
+      ignore_certs: If the certificate mismatches should be ignored.
       rpc_tries: The number of rpc retries upon http server error (i.e.
         Response code >= 500 and < 600) before failing.
     """
@@ -118,22 +116,26 @@ class HttpRpcServerHttpLib2(object):
     self.user_agent = user_agent
     self.source = source
     self.host_override = host_override
-    self.extra_headers = extra_headers
+    self.extra_headers = extra_headers or {}
     self.save_cookies = save_cookies
     self.auth_tries = auth_tries
     self.account_type = account_type
     self.debug_data = debug_data
     self.secure = secure
+    self.ignore_certs = ignore_certs
     self.rpc_tries = rpc_tries
     self.scheme = secure and 'https' or 'http'
 
+    self.certpath = None
+    self.cert_file_available = False
+    if not self.ignore_certs:
 
 
 
-    self.certpath = os.path.normpath(os.path.join(
-        os.path.dirname(__file__), '..', '..', '..', 'lib', 'cacerts',
-        'cacerts.txt'))
-    self.cert_file_available = os.path.exists(self.certpath)
+      self.certpath = os.path.normpath(os.path.join(
+          os.path.dirname(__file__), '..', '..', '..', 'lib', 'cacerts',
+          'cacerts.txt'))
+      self.cert_file_available = os.path.exists(self.certpath)
 
     self.memory_cache = MemoryCache()
 
@@ -180,24 +182,29 @@ class HttpRpcServerHttpLib2(object):
 
 
 
-    self.http = httplib2.Http(cache=self.memory_cache, ca_certs=self.certpath)
+    self.http = httplib2.Http(
+        cache=self.memory_cache, ca_certs=self.certpath,
+        disable_ssl_certificate_validation=(not self.cert_file_available))
     self.http.follow_redirects = False
     self.http.timeout = timeout
     url = '%s://%s%s' % (self.scheme, self.host, request_path)
     if kwargs:
-      url += '?' + urllib.urlencode(kwargs)
+      url += '?' + urllib.urlencode(sorted(kwargs.items()))
     headers = {}
     if self.extra_headers:
       headers.update(self.extra_headers)
-    headers['Content-Type'] = content_type
 
 
 
     headers['X-appcfg-api-version'] = '1'
 
-    payload = payload or ''
+    if payload is not None:
+      method = 'POST'
 
-    headers['content-length'] = str(len(payload))
+      headers['content-length'] = str(len(payload))
+      headers['Content-Type'] = content_type
+    else:
+      method = 'GET'
     if self.host_override:
       headers['Host'] = self.host_override
 
@@ -217,8 +224,8 @@ class HttpRpcServerHttpLib2(object):
                    url, headers,
                    self.debug_data and payload or payload and 'ELIDED' or '')
       try:
-        response_info, response = self.http.request(url, 'POST', body=payload,
-                                                    headers=headers)
+        response_info, response = self.http.request(
+            url, method=method, body=payload, headers=headers)
       except client.AccessTokenRefreshError, e:
 
         logger.info('Got access token error', exc_info=1)
@@ -243,7 +250,7 @@ class HttpRpcServerHttpLib2(object):
         loc = response_info.get('location')
         logger.debug('Got 302 redirect. Location: %s', loc)
         if (loc.startswith('https://www.google.com/accounts/ServiceLogin') or
-            re.match(r'https://www.google.com/a/[a-z0-9.-]+/ServiceLogin',
+            re.match(r'https://www\.google\.com/a/[a-z0-9.-]+/ServiceLogin',
                      loc)):
           NeedAuth()
           continue
@@ -272,7 +279,7 @@ class NoStorage(client.Storage):
     pass
 
 
-class HttpRpcServerOauth2(HttpRpcServerHttpLib2):
+class HttpRpcServerOAuth2(HttpRpcServerHttpLib2):
   """A variant of HttpRpcServer which uses oauth2.
 
   This variant is specifically meant for interactive command line usage,
@@ -280,19 +287,33 @@ class HttpRpcServerOauth2(HttpRpcServerHttpLib2):
   information from the resulting web page.
   """
 
-  def __init__(self, host, refresh_token, user_agent, source,
+  class OAuth2Parameters(ValueMixin):
+    """Class encapsulating parameters related to OAuth2 authentication."""
+
+    def __init__(self, access_token, client_id, client_secret, scope,
+                 refresh_token, credential_file, token_uri=None):
+      self.access_token = access_token
+      self.client_id = client_id
+      self.client_secret = client_secret
+      self.scope = scope
+      self.refresh_token = refresh_token
+      self.credential_file = credential_file
+      self.token_uri = token_uri
+
+  def __init__(self, host, oauth2_parameters, user_agent, source,
                host_override=None, extra_headers=None, save_cookies=False,
                auth_tries=None, account_type=None, debug_data=True, secure=True,
-               rpc_tries=3):
-    """Creates a new HttpRpcServerOauth2.
+               ignore_certs=False, rpc_tries=3):
+    """Creates a new HttpRpcServerOAuth2.
 
     Args:
       host: The host to send requests to.
-      refresh_token: A string refresh token to use, or None to guide the user
-        through the auth flow. (Replaces auth_function on parent class.)
+      oauth2_parameters: An object of type OAuth2Parameters (defined above)
+        that specifies all parameters related to OAuth2 authentication. (This
+        replaces the auth_function parameter in the parent class.)
       user_agent: The user-agent string to send to the server. Specify None to
         omit the user-agent header.
-      source: Tuple, (client_id, client_secret, scope), for oauth credentials.
+      source: Saved but ignored.
       host_override: The host header to send to the server (defaults to host).
       extra_headers: A dict of extra headers to append to every request. Values
         supplied here will override other default headers that are supplied.
@@ -301,32 +322,41 @@ class HttpRpcServerOauth2(HttpRpcServerHttpLib2):
       account_type: Ignored.
       debug_data: Whether debugging output should include data contents.
       secure: If the requests sent using Send should be sent over HTTPS.
+      ignore_certs: If the certificate mismatches should be ignored.
       rpc_tries: The number of rpc retries upon http server error (i.e.
         Response code >= 500 and < 600) before failing.
     """
-    super(HttpRpcServerOauth2, self).__init__(
-        host, None, user_agent, None, host_override=host_override,
+    super(HttpRpcServerOAuth2, self).__init__(
+        host, None, user_agent, source, host_override=host_override,
         extra_headers=extra_headers, auth_tries=auth_tries,
-        debug_data=debug_data, secure=secure, rpc_tries=rpc_tries)
+        debug_data=debug_data, secure=secure, ignore_certs=ignore_certs,
+        rpc_tries=rpc_tries)
+
+    if not isinstance(oauth2_parameters, self.OAuth2Parameters):
+      raise TypeError('oauth2_parameters must be an OAuth2Parameters.')
+    self.oauth2_parameters = oauth2_parameters
 
     if save_cookies:
+      oauth2_credential_file = (oauth2_parameters.credential_file
+                                or '~/.appcfg_oauth2_tokens')
       self.storage = oauth2client_file.Storage(
-          os.path.expanduser('~/.appcfg_oauth2_tokens'))
+          os.path.expanduser(oauth2_credential_file))
     else:
       self.storage = NoStorage()
 
-    if not isinstance(source, tuple) or len(source) != 3:
-      raise TypeError('Source must be tuple (client_id, client_secret, scope).')
-
-    self.client_id = source[0]
-    self.client_secret = source[1]
-    self.scope = source[2]
-
-    self.refresh_token = refresh_token
-    if refresh_token:
+    if any((oauth2_parameters.access_token, oauth2_parameters.refresh_token,
+            oauth2_parameters.token_uri)):
+      token_uri = (oauth2_parameters.token_uri or
+                   ('https://%s/o/oauth2/token' %
+                    os.getenv('APPENGINE_AUTH_SERVER', 'accounts.google.com')))
       self.credentials = client.OAuth2Credentials(
-          None, self.client_id, self.client_secret, refresh_token,
-          None, 'https://accounts.google.com/o/oauth2/token', self.user_agent)
+          oauth2_parameters.access_token,
+          oauth2_parameters.client_id,
+          oauth2_parameters.client_secret,
+          oauth2_parameters.refresh_token,
+          None,
+          token_uri,
+          self.user_agent)
     else:
       self.credentials = self.storage.get()
 
@@ -348,16 +378,29 @@ class HttpRpcServerOauth2(HttpRpcServerHttpLib2):
         the token is invalid.
     """
     if needs_auth and (not self.credentials or self.credentials.invalid):
-      if self.refresh_token:
 
-        logger.debug('_Authenticate and skipping auth because user explicitly '
+
+
+
+      if self.oauth2_parameters.access_token:
+        logger.debug('_Authenticate skipping auth because user explicitly '
+                     'supplied an access token.')
+        raise AuthPermanentFail('Access token is invalid.')
+      if self.oauth2_parameters.refresh_token:
+        logger.debug('_Authenticate skipping auth because user explicitly '
                      'supplied a refresh token.')
         raise AuthPermanentFail('Refresh token is invalid.')
-      logger.debug('_Authenticate and requesting auth')
+      if self.oauth2_parameters.token_uri:
+        logger.debug('_Authenticate skipping auth because user explicitly '
+                     'supplied a Token URI, for example for service account '
+                     'authentication with Compute Engine')
+        raise AuthPermanentFail('Token URI did not yield a valid token: ' +
+                                self.oauth_parameters.token_uri)
+      logger.debug('_Authenticate requesting auth')
       flow = client.OAuth2WebServerFlow(
-          client_id=self.client_id,
-          client_secret=self.client_secret,
-          scope=self.scope,
+          client_id=self.oauth2_parameters.client_id,
+          client_secret=self.oauth2_parameters.client_secret,
+          scope=_ScopesToString(self.oauth2_parameters.scope),
           user_agent=self.user_agent)
       self.credentials = tools.run(flow, self.storage)
     if self.credentials and not self.credentials.invalid:
@@ -369,3 +412,13 @@ class HttpRpcServerOauth2(HttpRpcServerHttpLib2):
         self.credentials.authorize(http)
         return
     logger.debug('_Authenticate skipped auth; needs_auth=%s', needs_auth)
+
+
+def _ScopesToString(scopes):
+  """Converts scope value to a string."""
+
+
+  if isinstance(scopes, types.StringTypes):
+    return scopes
+  else:
+    return ' '.join(scopes)

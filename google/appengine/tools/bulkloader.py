@@ -14,20 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 """Imports data over HTTP.
 
 Usage:
@@ -220,6 +206,9 @@ DEFAULT_REQUEST_LIMIT = 8
 
 MAXIMUM_INCREASE_DURATION = 5.0
 MAXIMUM_HOLD_DURATION = 12.0
+
+AUTH_FAILED_MESSAGE = ('Authentication Failed: Incorrect credentials or '
+                       'unsupported authentication type (e.g. OpenId).')
 
 
 def ImportStateMessage(state):
@@ -1193,15 +1182,36 @@ class MapperItem(KeyRangeItem):
     return transfer_time
 
 
-def IncrementId(high_id_key):
-  """Increment unique id counter associated with high_id_key beyond high_id_key.
+def ConvertKeys(keys):
+  """Convert a list of keys to a list of keys with the app_id of the caller.
 
   Args:
-    high_id_key: A key with a full path to the desired kind and id
-        value to which to increment the unique id counter beyond.
+    keys: A list of datastore Entity Keys.
+
+  Returns:
+    A new list of keys in the same order as the input with app_id set to the
+    default app_id in the calling context. Whichever input keys were already
+    of this app_id are copied by reference.
   """
-  unused_start, end = datastore.AllocateIds(high_id_key, max=high_id_key.id())
-  assert end >= high_id_key.id()
+  def ChangeApp(key, app_id):
+    if key.app() == app_id:
+      return key
+    return datastore.Key.from_path(namespace=key.namespace(),
+                                   _app=app_id, *key.to_path())
+
+  app_id = datastore.Key.from_path('kind', 'name').app()
+  return [ChangeApp(key, app_id) for key in keys]
+
+
+def ReserveKeys(keys):
+  """Reserve all ids in the paths of the given keys.
+
+  Args:
+    keys: A list of keys with ids in their paths, for which the corresponding
+        id sequences should be advanced to prevent id collisions.
+  """
+
+  datastore._GetConnection()._reserve_keys(ConvertKeys(keys))
 
 
 def _AuthFunction(host, email, passin, raw_input_fn, password_input_fn):
@@ -1338,31 +1348,53 @@ class RequestManager(object):
     return _AuthFunction(self.host, self.email, self.passin,
                          raw_input_fn, password_input_fn)
 
-  def IncrementId(self, ancestor_path, kind, high_id):
-    """Increment the unique id counter associated with ancestor_path and kind.
+  def ReserveKeys(self, keys):
+    """Reserve all ids in the paths of the given keys.
 
     Args:
-      ancestor_path: A list encoding the path of a key.
-      kind: The string name of a kind.
-      high_id: The int value to which to increment the unique id counter.
+      keys: A list of keys with ids in their paths, for which the corresponding
+          id sequences should be advanced to prevent id collisions.
     """
     if self.dry_run:
       return
-    high_id_key = datastore.Key.from_path(*(ancestor_path + [kind, high_id]))
-    IncrementId(high_id_key)
+    ReserveKeys(keys)
 
   def GetSchemaKinds(self):
-    """Returns the list of kinds for this app."""
-    global_stat = stats.GlobalStat.all().get()
+    """Returns the list of kinds for this app.
+
+    There can be 3 possible cases using namespaces:
+      a.) No namespace specified and Datastore has only default namespace ->
+          Query GlobalStat and KindStat.
+      b.) No namespace specified but Datastore has multiple namespace ->
+          Query NamespaceGlobalStat and NamespaceKindStat.
+      c.) Namespace specified and Datastore has multiple namespaces ->
+          Query NamespaceGlobalStat and NamespaceKindStat.
+
+    Returns:
+      A list of kinds.
+    """
+    namespaces = False
+
+    if (namespace_manager.get_namespace() or
+        stats.NamespaceStat.all().count() > 1):
+      namespaces = True
+
+    if namespaces:
+      global_kind = stats.NamespaceGlobalStat
+    else:
+      global_kind = stats.GlobalStat
+
+    kinds_kind = stats.NamespaceKindStat if namespaces else stats.KindStat
+
+    global_stat = global_kind.all().get()
     if not global_stat:
       raise KindStatError()
     timestamp = global_stat.timestamp
-    kind_stat = stats.KindStat.all().filter(
+    kind_stat = kinds_kind.all().filter(
         "timestamp =", timestamp).fetch(1000)
     kind_list = [stat.kind_name for stat in kind_stat
                  if stat.kind_name and not stat.kind_name.startswith('__')]
-    kind_set = set(kind_list)
-    return list(kind_set)
+    return list(set(kind_list))
 
   def EncodeContent(self, rows, loader=None):
     """Encodes row data to the wire format.
@@ -2668,13 +2700,14 @@ class Loader(object):
     """
     Loader.__loaders[loader.kind] = loader
 
-  def get_high_ids(self):
-    """Returns dict {ancestor_path : {kind : id}} with high id values.
+  def get_keys_to_reserve(self):
+    """Returns keys with ids in their paths to be reserved.
 
-    The returned dictionary is used to increment the id counters
-    associated with each ancestor_path and kind to be at least id.
+    Returns:
+      A list of keys used to advance the id sequences associated with
+      each id to prevent collisions with future ids.
     """
-    return {}
+    return []
 
   def alias_old_names(self):
     """Aliases method names so that Loaders defined with old names work."""
@@ -2882,39 +2915,38 @@ class RestoreLoader(Loader):
     self.queue = Queue.Queue(1000)
     restore_thread = RestoreThread(self.queue, filename)
     restore_thread.start()
-    self.high_id_table = self._find_high_id(self.generate_records(filename))
+    self.keys_to_reserve = self._find_keys_to_reserve(
+        self.generate_records(filename))
     restore_thread = RestoreThread(self.queue, filename)
     restore_thread.start()
 
-  def get_high_ids(self):
-    return dict(self.high_id_table)
+  def get_keys_to_reserve(self):
+    """Returns keys with ids in their paths to be reserved.
 
-  def _find_high_id(self, record_generator):
-    """Find the highest numeric id used for each ancestor-path, kind pair.
+    Returns:
+      A list of keys used to advance the id sequences associated with
+      each id to prevent collisions with future ids.
+    """
+    return self.keys_to_reserve
+
+  def _find_keys_to_reserve(self, record_generator):
+    """Find all entity keys with ids in their paths.
 
     Args:
       record_generator: A generator of entity_encoding strings.
 
     Returns:
-      A map from ancestor-path to maps from kind to id. {path : {kind : id}}
+      A list of keys to reserve.
     """
-    high_id = {}
+    keys_to_reserve = []
     for values in record_generator:
       entity = self.create_entity(values)
       key = entity.key()
-
-      if not key.id():
-        continue
-      kind = key.kind()
-      ancestor_path = []
-      if key.parent():
-        ancestor_path = key.parent().to_path()
-      if tuple(ancestor_path) not in high_id:
-        high_id[tuple(ancestor_path)] = {}
-      kind_map = high_id[tuple(ancestor_path)]
-      if kind not in kind_map or kind_map[kind] < key.id():
-        kind_map[kind] = key.id()
-    return high_id
+      for id_or_name in key.to_path()[1::2]:
+        if isinstance(id_or_name, (int, long)):
+          keys_to_reserve.append(key)
+          break
+    return keys_to_reserve
 
   def generate_records(self, filename):
     while True:
@@ -3263,6 +3295,7 @@ class QueueJoinThread(threading.Thread):
       queue: The queue for this thread to join.
     """
     threading.Thread.__init__(self)
+    self.setDaemon(True)
     assert isinstance(queue, (Queue.Queue, ReQueue))
     self.queue = queue
 
@@ -3576,10 +3609,7 @@ class BulkUploaderApp(BulkTransporterApp):
 
   def RunPostAuthentication(self):
     loader = Loader.RegisteredLoader(self.kind)
-    high_id_table = loader.get_high_ids()
-    for ancestor_path, kind_map in high_id_table.iteritems():
-      for kind, high_id in kind_map.iteritems():
-        self.request_manager.IncrementId(list(ancestor_path), kind, high_id)
+    self.request_manager.ReserveKeys(loader.get_keys_to_reserve())
     return [self.kind]
 
   def ReportStatus(self):
@@ -3759,7 +3789,7 @@ def ParseArguments(argv, die_fn=lambda: PrintUsageExit(1)):
       continue
     option = option[2:]
     if option in DEPRECATED_OPTIONS:
-      print >>sys.stderr, ('--%s is deprecated, please use --%s.' %
+      print >> sys.stderr, ('--%s is deprecated, please use --%s.' %
                            (option, DEPRECATED_OPTIONS[option]))
       option = DEPRECATED_OPTIONS[option]
 
@@ -3818,7 +3848,7 @@ def LoadYamlConfig(config_file_name):
     config_file_name: The name of the configuration file.
   """
   (loaders, exporters) = bulkloader_config.load_config(config_file_name,
-                                                       increment_id=IncrementId)
+                                                       reserve_keys=ReserveKeys)
   for cls in loaders:
     Loader.RegisterLoader(cls())
   for cls in exporters:
@@ -3865,7 +3895,7 @@ def LoadConfig(config_file_name, exit_fn=sys.exit):
 
       m = re.search(r"[^']*'([^']*)'.*", str(e))
       if m.groups() and m.group(1) == 'Loader':
-        print >>sys.stderr, """
+        print >> sys.stderr, """
 The config file format has changed and you appear to be using an old-style
 config file.  Please make the following changes:
 
@@ -3896,7 +3926,7 @@ to have access to.
           hasattr(bulkloader_config, 'bulkloader') and
           isinstance(e, bulkloader_config.bulkloader.NameClashError)):
         print >> sys.stderr, (
-            'Found both %s and %s while aliasing old names on %s.'%
+            'Found both %s and %s while aliasing old names on %s.' %
             (e.old_name, e.new_name, e.klass))
         exit_fn(1)
       else:
@@ -3916,7 +3946,7 @@ def GetArgument(kwargs, name, die_fn):
   if name in kwargs:
     return kwargs[name]
   else:
-    print >>sys.stderr, '%s argument required' % name
+    print >> sys.stderr, '%s argument required' % name
     die_fn()
 
 
@@ -4041,7 +4071,7 @@ def ProcessArguments(arg_dict,
 
 
   if errors:
-    print >>sys.stderr, '\n'.join(errors)
+    print >> sys.stderr, '\n'.join(errors)
     die_fn()
 
   return arg_dict
@@ -4235,7 +4265,7 @@ def _PerformBulkload(arg_dict,
       try:
         return_code = app.Run()
       except AuthenticationError:
-        logger.info('Authentication Failed')
+        logger.error(AUTH_FAILED_MESSAGE)
     finally:
       loader.finalize()
   elif download or dump or create_config:
@@ -4269,7 +4299,7 @@ def _PerformBulkload(arg_dict,
       try:
         return_code = app.Run()
       except AuthenticationError:
-        logger.info('Authentication Failed')
+        logger.error(AUTH_FAILED_MESSAGE)
       except KindStatError:
         logger.error('Unable to download kind stats for all-kinds download.')
         logger.error('Kind stats are generated periodically by the appserver')
@@ -4304,7 +4334,7 @@ def _PerformBulkload(arg_dict,
       try:
         return_code = app.Run()
       except AuthenticationError:
-        logger.info('Authentication Failed')
+        logger.error(AUTH_FAILED_MESSAGE)
     finally:
       mapper.finalize()
   return return_code
@@ -4386,7 +4416,7 @@ def main(argv):
             for (key, value) in arg_dict.iteritems()
             if value is REQUIRED_OPTION]
   if errors:
-    print >>sys.stderr, '\n'.join(errors)
+    print >> sys.stderr, '\n'.join(errors)
     PrintUsageExit(1)
 
   SetupLogging(arg_dict)

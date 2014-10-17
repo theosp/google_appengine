@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-
-
-
 """Serves the stub App Engine APIs (e.g. memcache, datastore) over HTTP.
 
 The Remote API protocol is used for communication.
@@ -41,19 +37,20 @@ import time
 import traceback
 import urllib2
 import urlparse
+import wsgiref.headers
 
 import google
 import yaml
 
 
 from google.appengine.api import mail_stub
+from google.appengine.api import request_info
 from google.appengine.api import urlfetch_stub
 from google.appengine.api import user_service_stub
 from google.appengine.api.app_identity import app_identity_stub
 from google.appengine.api.blobstore import blobstore_stub
 from google.appengine.api.blobstore import file_blob_storage
 from google.appengine.api.capabilities import capability_stub
-from google.appengine.api.conversion import conversion_stub
 from google.appengine.api.channel import channel_service_stub
 from google.appengine.api.files import file_service_stub
 from google.appengine.api.logservice import logservice_stub
@@ -66,6 +63,7 @@ from google.appengine.api.xmpp import xmpp_service_stub
 from google.appengine.api import datastore_file_stub
 from google.appengine.datastore import datastore_sqlite_stub
 from google.appengine.datastore import datastore_stub_util
+from google.appengine.datastore import datastore_v4_stub
 
 from google.appengine.api import apiproxy_stub_map
 from google.appengine.ext.remote_api import remote_api_pb
@@ -113,9 +111,10 @@ THREAD_SAFE_SERVICES = frozenset((
     'app_identity_service',
     'capability_service',
     'channel',
-    'conversion',
+    'logservice',
     'mail',
     'memcache',
+    'remote_socket',
     'urlfetch',
     'user',
     'xmpp',
@@ -231,26 +230,31 @@ class APIServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
 def _SetupStubs(
     app_id,
     application_root,
+    appidentity_email_address,
+    appidentity_private_key_path,
     trusted,
     blobstore_path,
     use_sqlite,
+    auto_id_policy,
     high_replication,
     datastore_path,
     datastore_require_indexes,
     images_host_prefix,
-    persist_logs,
+    logs_path,
     mail_smtp_host,
     mail_smtp_port,
     mail_smtp_user,
     mail_smtp_password,
     mail_enable_sendmail,
     mail_show_mail_body,
+    mail_allow_tls,
     matcher_prospective_search_path,
     taskqueue_auto_run_tasks,
     taskqueue_task_retry_seconds,
     taskqueue_default_http_server,
     user_login_url,
-    user_logout_url):
+    user_logout_url,
+    default_gcs_bucket_name):
   """Configures the APIs hosted by this server.
 
   Args:
@@ -262,6 +266,9 @@ def _SetupStubs(
         storage.
     use_sqlite: A bool indicating whether DatastoreSqliteStub or
         DatastoreFileStub should be used.
+    auto_id_policy: One of datastore_stub_util.SEQUENTIAL or .SCATTERED,
+        indicating whether the Datastore stub should assign IDs sequentially
+        or scattered.
     high_replication: A bool indicating whether to use the high replication
         consistency model.
     datastore_path: The path to the file that should be used for datastore
@@ -272,8 +279,7 @@ def _SetupStubs(
         is executed without the required indexes.
     images_host_prefix: The URL prefix (protocol://host:port) to preprend to
         image urls on calls to images.GetUrlBase.
-    persist_logs: A bool indicating if request and application logs should be
-         persisted for later access.
+    logs_path: Path to the file to store the logs data in.
     mail_smtp_host: The SMTP hostname that should be used when sending e-mails.
         If None then the mail_enable_sendmail argument is considered.
     mail_smtp_port: The SMTP port number that should be used when sending
@@ -288,6 +294,7 @@ def _SetupStubs(
         sending e-mails. This argument is ignored if mail_smtp_host is not None.
     mail_show_mail_body: A bool indicating whether the body of sent e-mails
         should be written to the logs.
+    mail_allow_tls: A bool indicating whether to allow TLS support.
     matcher_prospective_search_path: The path to the file that should be used to
         save prospective search subscriptions.
     taskqueue_auto_run_tasks: A bool indicating whether taskqueue tasks should
@@ -299,6 +306,7 @@ def _SetupStubs(
     user_login_url: A str containing the url that should be used for user login.
     user_logout_url: A str containing the url that should be used for user
         logout.
+    default_gcs_bucket_name: A str overriding the usual default bucket name.
   """
 
 
@@ -309,9 +317,13 @@ def _SetupStubs(
 
 
 
+  tmp_app_identity_stub = app_identity_stub.AppIdentityServiceStub.Create(
+      email_address=appidentity_email_address,
+      private_key_path=appidentity_private_key_path)
+  if default_gcs_bucket_name is not None:
+    tmp_app_identity_stub.SetDefaultGcsBucketName(default_gcs_bucket_name)
   apiproxy_stub_map.apiproxy.RegisterStub(
-      'app_identity_service',
-      app_identity_stub.AppIdentityServiceStub())
+      'app_identity_service', tmp_app_identity_stub)
 
   blob_storage = file_blob_storage.FileBlobStorage(blobstore_path, app_id)
   apiproxy_stub_map.apiproxy.RegisterStub(
@@ -333,24 +345,22 @@ def _SetupStubs(
       'channel',
       channel_service_stub.ChannelServiceStub())
 
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'conversion',
-      conversion_stub.ConversionServiceStub())
-
   if use_sqlite:
     datastore = datastore_sqlite_stub.DatastoreSqliteStub(
         app_id,
         datastore_path,
         datastore_require_indexes,
         trusted,
-        root_path=application_root)
+        root_path=application_root,
+        auto_id_policy=auto_id_policy)
   else:
     datastore = datastore_file_stub.DatastoreFileStub(
         app_id,
         datastore_path,
         datastore_require_indexes,
         trusted,
-        root_path=application_root)
+        root_path=application_root,
+        auto_id_policy=auto_id_policy)
 
   if high_replication:
     datastore.SetConsistencyPolicy(
@@ -358,6 +368,10 @@ def _SetupStubs(
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'datastore_v3', datastore)
+
+  apiproxy_stub_map.apiproxy.RegisterStub(
+      'datastore_v4',
+      datastore_v4_stub.DatastoreV4Stub(app_id))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'file',
@@ -382,7 +396,7 @@ def _SetupStubs(
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'logservice',
-      logservice_stub.LogServiceStub(persist_logs))
+      logservice_stub.LogServiceStub(logs_path=logs_path))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'mail',
@@ -391,7 +405,8 @@ def _SetupStubs(
                                 mail_smtp_user,
                                 mail_smtp_password,
                                 enable_sendmail=mail_enable_sendmail,
-                                show_mail_body=mail_show_mail_body))
+                                show_mail_body=mail_show_mail_body,
+                                allow_tls=mail_allow_tls))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'memcache',
@@ -469,6 +484,8 @@ def ParseCommandArguments(args):
                       action=boolean_action.BooleanAction,
                       const=True,
                       default=False)
+  parser.add_argument('--appidentity_email_address', default=None)
+  parser.add_argument('--appidentity_private_key_path', default=None)
   parser.add_argument('--application_root', default=None)
   parser.add_argument('--application_host', default='localhost')
   parser.add_argument('--application_port', default=None)
@@ -478,6 +495,12 @@ def ParseCommandArguments(args):
 
 
   parser.add_argument('--datastore_path', default=None)
+
+  parser.add_argument('--auto_id_policy', default='scattered',
+      type=lambda s: s.lower(),
+      choices=(datastore_stub_util.SEQUENTIAL,
+               datastore_stub_util.SCATTERED))
+
   parser.add_argument('--use_sqlite',
                       action=boolean_action.BooleanAction,
                       const=True,
@@ -496,10 +519,7 @@ def ParseCommandArguments(args):
                       default=False)
 
 
-  parser.add_argument('--persist_logs',
-                      action=boolean_action.BooleanAction,
-                      const=True,
-                      default=False)
+  parser.add_argument('--logs_path', default=None)
 
 
   parser.add_argument('--enable_sendmail',
@@ -515,6 +535,10 @@ def ParseCommandArguments(args):
                       action=boolean_action.BooleanAction,
                       const=True,
                       default=False)
+  parser.add_argument('--smtp_allow_tls',
+                      action=boolean_action.BooleanAction,
+                      const=True,
+                      default=True)
 
 
   parser.add_argument('--prospective_search_path', default=None)
@@ -552,9 +576,12 @@ class APIServerProcess(object):
                port,
                app_id,
                script=None,
+               appidentity_email_address=None,
+               appidentity_private_key_path=None,
                application_host=None,
                application_port=None,
                application_root=None,
+               auto_id_policy=None,
                blobstore_path=None,
                clear_datastore=None,
                clear_prospective_search=None,
@@ -562,7 +589,7 @@ class APIServerProcess(object):
                enable_sendmail=None,
                enable_task_running=None,
                high_replication=None,
-               persist_logs=None,
+               logs_path=None,
                prospective_search_path=None,
                require_indexes=None,
                show_mail_body=None,
@@ -570,9 +597,11 @@ class APIServerProcess(object):
                smtp_password=None,
                smtp_port=None,
                smtp_user=None,
+               smtp_allow_tls=None,
                task_retry_seconds=None,
                trusted=None,
-               use_sqlite=None):
+               use_sqlite=None,
+               default_gcs_bucket_name=None):
     """Configures the APIs hosted by this server.
 
     Args:
@@ -585,12 +614,16 @@ class APIServerProcess(object):
       script: The name of the script that should be used, along with the
           executable argument, to run the API Server e.g. "api_server.py".
           If None then the executable is run without a script argument.
+      appidentity_email_address: Email address for service account substitute.
+      appidentity_private_key_path: Private key for service account substitute.
       application_host: The name of the host where the development application
           server is running e.g. "localhost".
       application_port: The port where the application server is running e.g.
           8000.
       application_root: The path to the directory containing the user's
           application e.g. "/home/bquinlan/myapp".
+      auto_id_policy: One of "sequential" or "scattered", indicating whether
+        the Datastore stub should assign IDs sequentially or scattered.
       blobstore_path: The path to the file that should be used for blobstore
           storage.
       clear_datastore: Clears the file at datastore_path, emptying the
@@ -605,8 +638,7 @@ class APIServerProcess(object):
           be run automatically or it the must be manually triggered.
       high_replication: A bool indicating whether to use the high replication
           consistency model.
-      persist_logs: A bool indicating if request and application logs should be
-           persisted for later access.
+      logs_path: Path to the file to store the logs data in.
       prospective_search_path: The path to the file that should be used to
           save prospective search subscriptions.
       require_indexes: A bool indicating if the same production
@@ -625,11 +657,13 @@ class APIServerProcess(object):
       smtp_user: The username to use when authenticating with the
           SMTP server. This value may be None if smtp_host is also None or if
           the SMTP server does not require authentication.
+      smtp_allow_tls: A bool indicating whether to enable TLS.
       task_retry_seconds: An int representing the number of seconds to
           wait before a retrying a failed taskqueue task.
       trusted: A bool indicating if privileged APIs should be made available.
       use_sqlite: A bool indicating whether DatastoreSqliteStub or
           DatastoreFileStub should be used.
+      default_gcs_bucket_name: A str overriding the normal default bucket name.
     """
     self._process = None
     self._host = host
@@ -640,10 +674,13 @@ class APIServerProcess(object):
       self._args = [executable]
     self._BindArgument('--api_host', host)
     self._BindArgument('--api_port', port)
+    self._BindArgument('--appidentity_email_address', appidentity_email_address)
+    self._BindArgument('--appidentity_private_key_path', appidentity_private_key_path)
     self._BindArgument('--application_host', application_host)
     self._BindArgument('--application_port', application_port)
     self._BindArgument('--application_root', application_root)
     self._BindArgument('--application', app_id)
+    self._BindArgument('--auto_id_policy', auto_id_policy)
     self._BindArgument('--blobstore_path', blobstore_path)
     self._BindArgument('--clear_datastore', clear_datastore)
     self._BindArgument('--clear_prospective_search', clear_prospective_search)
@@ -651,7 +688,7 @@ class APIServerProcess(object):
     self._BindArgument('--enable_sendmail', enable_sendmail)
     self._BindArgument('--enable_task_running', enable_task_running)
     self._BindArgument('--high_replication', high_replication)
-    self._BindArgument('--persist_logs', persist_logs)
+    self._BindArgument('--logs_path', logs_path)
     self._BindArgument('--prospective_search_path', prospective_search_path)
     self._BindArgument('--require_indexes', require_indexes)
     self._BindArgument('--show_mail_body', show_mail_body)
@@ -659,9 +696,11 @@ class APIServerProcess(object):
     self._BindArgument('--smtp_password', smtp_password)
     self._BindArgument('--smtp_port', smtp_port)
     self._BindArgument('--smtp_user', smtp_user)
+    self._BindArgument('--smtp_allow_tls', smtp_allow_tls)
     self._BindArgument('--task_retry_seconds', task_retry_seconds)
     self._BindArgument('--trusted', trusted)
     self._BindArgument('--use_sqlite', use_sqlite)
+    self._BindArgument('--default_gcs_bucket_name', default_gcs_bucket_name)
 
   @property
   def url(self):
@@ -738,6 +777,61 @@ class APIServerProcess(object):
         self._process.kill()
 
 
+class ApiServerDispatcher(request_info._LocalFakeDispatcher):
+  """An api_server Dispatcher implementation."""
+
+  def add_request(self, method, relative_url, headers, body, source_ip,
+                  server_name=None, version=None, instance_id=None):
+    """Process an HTTP request.
+
+    Args:
+      method: A str containing the HTTP method of the request.
+      relative_url: A str containing path and query string of the request.
+      headers: A list of (key, value) tuples where key and value are both str.
+      body: A str containing the request body.
+      source_ip: The source ip address for the request.
+      server_name: An optional str containing the server name to service this
+          request. If unset, the request will be dispatched to the default
+          server.
+      version: An optional str containing the version to service this request.
+          If unset, the request will be dispatched to the default version.
+      instance_id: An optional str containing the instance_id of the instance to
+          service this request. If unset, the request will be dispatched to
+          according to the load-balancing for the server and version.
+
+    Returns:
+      A request_info.ResponseTuple containing the response information for the
+      HTTP request.
+    """
+    try:
+      header_dict = wsgiref.headers.Headers(headers)
+      connection_host = header_dict.get('host')
+      connection = httplib.HTTPConnection(connection_host)
+
+
+      connection.putrequest(
+          method, relative_url,
+          skip_host='host' in header_dict,
+          skip_accept_encoding='accept-encoding' in header_dict)
+
+      for header_key, header_value in headers:
+        connection.putheader(header_key, header_value)
+      connection.endheaders()
+      connection.send(body)
+
+      response = connection.getresponse()
+      response.read()
+      response.close()
+
+      return request_info.ResponseTuple(
+          '%d %s' % (response.status, response.reason), [], '')
+    except (httplib.HTTPException, socket.error):
+      logging.exception(
+          'An error occured while sending a %s request to "%s%s"',
+          method, connection_host, relative_url)
+      return request_info.ResponseTuple('0', [], '')
+
+
 def main():
 
   logging.basicConfig(
@@ -772,28 +866,37 @@ def main():
   else:
     application_address = None
 
+  if not hasattr(args, 'default_gcs_bucket_name'):
+    args.default_gcs_bucket_name = None
+
+  request_info._local_dispatcher = ApiServerDispatcher()
   _SetupStubs(app_id=args.application,
               application_root=args.application_root,
+              appidentity_email_address=args.appidentity_email_address,
+              appidentity_private_key_path=args.appidentity_private_key_path,
               trusted=args.trusted,
               blobstore_path=args.blobstore_path,
               datastore_path=args.datastore_path,
               use_sqlite=args.use_sqlite,
+              auto_id_policy=args.auto_id_policy,
               high_replication=args.high_replication,
               datastore_require_indexes=args.require_indexes,
               images_host_prefix=application_address,
-              persist_logs=args.persist_logs,
+              logs_path=args.logs_path,
               mail_smtp_host=args.smtp_host,
               mail_smtp_port=args.smtp_port,
               mail_smtp_user=args.smtp_user,
               mail_smtp_password=args.smtp_password,
               mail_enable_sendmail=args.enable_sendmail,
               mail_show_mail_body=args.show_mail_body,
+              mail_allow_tls=args.smtp_allow_tls,
               matcher_prospective_search_path=args.prospective_search_path,
               taskqueue_auto_run_tasks=args.enable_task_running,
               taskqueue_task_retry_seconds=args.task_retry_seconds,
               taskqueue_default_http_server=application_address,
               user_login_url=args.user_login_url,
-              user_logout_url=args.user_logout_url)
+              user_logout_url=args.user_logout_url,
+              default_gcs_bucket_name=args.default_gcs_bucket_name)
   server = APIServer((args.api_host, args.api_port), args.application)
   try:
     server.serve_forever()

@@ -22,7 +22,6 @@
 
 
 import base64
-import collections
 import datetime
 import logging
 import os
@@ -30,18 +29,31 @@ import random
 
 from google.appengine.datastore import entity_pb
 from google.appengine.api import datastore
-from google.appengine.api import lib_config
 from google.appengine.api import memcache
 from google.appengine.api import users
 from google.appengine.datastore import datastore_rpc
 from google.appengine.ext import db
 from google.appengine.ext import webapp
+from google.appengine.ext.datastore_admin import config
 from google.appengine.ext.db import stats
-from google.appengine.ext.mapreduce import control
-from google.appengine.ext.mapreduce import model
-from google.appengine.ext.mapreduce import operation
-from google.appengine.ext.mapreduce import util
 from google.appengine.ext.webapp import _template
+
+
+try:
+
+  from google.appengine.ext.mapreduce import context
+  from google.appengine.ext.mapreduce import control
+  from google.appengine.ext.mapreduce import model
+  from google.appengine.ext.mapreduce import operation as mr_operation
+  from google.appengine.ext.mapreduce import util
+except ImportError:
+
+  from google.appengine._internal.mapreduce import context
+  from google.appengine._internal.mapreduce import control
+  from google.appengine._internal.mapreduce import model
+  from google.appengine._internal.mapreduce import operation as mr_operation
+  from google.appengine._internal.mapreduce import util
+
 
 MEMCACHE_NAMESPACE = '_ah-datastore_admin'
 XSRF_VALIDITY_TIME = 600
@@ -49,44 +61,22 @@ KINDS_AND_SIZES_VAR = 'kinds_and_sizes'
 MAPREDUCE_MIN_SHARDS = 8
 MAPREDUCE_DEFAULT_SHARDS = 32
 MAPREDUCE_MAX_SHARDS = 256
-
+RESERVE_KEY_POOL_MAX_SIZE = 1000
 
 DATASTORE_ADMIN_OPERATION_KIND = '_AE_DatastoreAdmin_Operation'
 BACKUP_INFORMATION_KIND = '_AE_Backup_Information'
 BACKUP_INFORMATION_FILES_KIND = '_AE_Backup_Information_Kind_Files'
+BACKUP_INFORMATION_KIND_TYPE_INFO = '_AE_Backup_Information_Kind_Type_Info'
 DATASTORE_ADMIN_KINDS = (DATASTORE_ADMIN_OPERATION_KIND,
                          BACKUP_INFORMATION_KIND,
-                         BACKUP_INFORMATION_FILES_KIND)
-
-
-class ConfigDefaults(object):
-  """Configurable constants.
-
-  To override datastore_admin configuration values, define values like this
-  in your appengine_config.py file (in the root of your app):
-
-    datastore_admin_MAPREDUCE_PATH = /_ah/mapreduce
-  """
-
-  BASE_PATH = '/_ah/datastore_admin'
-  MAPREDUCE_PATH = '/_ah/mapreduce'
-  DEFERRED_PATH = BASE_PATH + '/queue/deferred'
-  CLEANUP_MAPREDUCE_STATE = True
-
-
-
-config = lib_config.register('datastore_admin', ConfigDefaults.__dict__)
-
-
-
-
-config.BASE_PATH
-
-
+                         BACKUP_INFORMATION_FILES_KIND,
+                         BACKUP_INFORMATION_KIND_TYPE_INFO)
 
 
 def IsKindNameVisible(kind_name):
-  return not (kind_name.startswith('__') or kind_name in DATASTORE_ADMIN_KINDS)
+  return not (kind_name.startswith('__') or
+              kind_name in DATASTORE_ADMIN_KINDS or
+              kind_name in model._MAP_REDUCE_KINDS)
 
 
 def RenderToResponse(handler, template_file, template_params):
@@ -98,6 +88,18 @@ def RenderToResponse(handler, template_file, template_params):
     template_params: the parameters used to render the given template
   """
   template_params = _GetDefaultParams(template_params)
+
+
+
+
+
+
+
+
+  handler.response.headers['X-FRAME-OPTIONS'] = ('ALLOW-FROM %s' %
+                                                 config.ADMIN_CONSOLE_URL)
+  template_params['admin_console_url'] = config.ADMIN_CONSOLE_URL
+
   rendered = _template.render(_GetTemplatePath(template_file), template_params)
   handler.response.out.write(rendered)
 
@@ -329,8 +331,28 @@ def ParseKindsAndSizes(kinds):
 
 
 def _CreateDatastoreConfig():
-  """Create datastore config for use during datastore admin operations."""
-  return datastore_rpc.Configuration(force_writes=True)
+  """Create datastore config for use during datastore operations."""
+  return datastore_rpc.Configuration(force_writes=True, deadline=60)
+
+
+def GenerateHomeUrl(request):
+  """Generates a link to the Datastore Admin main page.
+
+  Primarily intended to be used for cancel buttons or links on error pages. To
+  avoid any XSS security vulnerabilities the URL should not use any
+  user-defined strings (unless proper precautions are taken).
+
+  Args:
+    request: the webapp.Request object (to determine if certain query
+      parameters need to be used).
+
+  Returns:
+    domain-relative URL for the main Datastore Admin page.
+  """
+  datastore_admin_home = config.BASE_PATH
+  if request and request.get('run_as_a_service'):
+    datastore_admin_home += '?run_as_a_service=True'
+  return datastore_admin_home
 
 
 class MapreduceDoneHandler(webapp.RequestHandler):
@@ -345,16 +367,8 @@ class MapreduceDoneHandler(webapp.RequestHandler):
       mapreduce_state = model.MapreduceState.get_by_job_id(mapreduce_id)
       mapreduce_params = mapreduce_state.mapreduce_spec.params
 
-      keys = []
-      job_success = True
-      shard_states = model.ShardState.find_by_mapreduce_state(mapreduce_state)
-      for shard_state in shard_states:
-        keys.append(shard_state.key())
-        if not shard_state.result_status == 'success':
-          job_success = False
-
       db_config = _CreateDatastoreConfig()
-      if job_success:
+      if mapreduce_state.result_status == model.MapreduceState.RESULT_SUCCESS:
         operation_key = mapreduce_params.get(
             DatastoreAdminOperation.PARAM_DATASTORE_ADMIN_OPERATION)
         if operation_key is None:
@@ -384,16 +398,24 @@ class MapreduceDoneHandler(webapp.RequestHandler):
                               mapreduce_params['done_callback_handler'])
           db.run_in_transaction(tx)
         if config.CLEANUP_MAPREDUCE_STATE:
+          keys = []
+          keys = model.ShardState.calculate_keys_by_mapreduce_state(
+              mapreduce_state)
 
-          keys.append(mapreduce_state.key())
           keys.append(model.MapreduceControl.get_key_by_job_id(mapreduce_id))
           db.delete(keys, config=db_config)
+          db.delete(mapreduce_state, config=db_config)
           logging.info('State for successful job %s was deleted.', mapreduce_id)
       else:
         logging.info('Job %s was not successful so no state was deleted.',
                      mapreduce_id)
     else:
       logging.error('Done callback called without Mapreduce Id.')
+
+
+class Error(Exception):
+  """Base DatastoreAdmin error type."""
+
 
 
 class DatastoreAdminOperation(db.Model):
@@ -415,6 +437,8 @@ class DatastoreAdminOperation(db.Model):
   completed_jobs = db.IntegerProperty(default=0)
   last_updated = db.DateTimeProperty(default=DEFAULT_LAST_UPDATED_VALUE,
                                      auto_now=True)
+  status_info = db.StringProperty(default='', indexed=False)
+  service_job_id = db.StringProperty()
 
   @classmethod
   def kind(cls):
@@ -451,6 +475,7 @@ def StartOperation(description):
   return operation
 
 
+@db.non_transactional(allow_existing=False)
 def StartMap(operation_key,
              job_name,
              handler_spec,
@@ -458,7 +483,6 @@ def StartMap(operation_key,
              writer_spec,
              mapper_params,
              mapreduce_params=None,
-             start_transaction=True,
              queue_name=None,
              shard_count=MAPREDUCE_DEFAULT_SHARDS):
   """Start map as part of datastore admin operation.
@@ -473,7 +497,6 @@ def StartMap(operation_key,
     writer_spec: Output writer specification.
     mapper_params: Custom mapper parameters.
     mapreduce_params: Custom mapreduce parameters.
-    start_transaction: Specify if a new transaction should be started.
     queue_name: the name of the queue that will be used by the M/R.
     shard_count: the number of shards the M/R will try to use.
 
@@ -487,10 +510,21 @@ def StartMap(operation_key,
       str(operation_key))
   mapreduce_params['done_callback'] = '%s/%s' % (config.BASE_PATH,
                                                  MapreduceDoneHandler.SUFFIX)
+  if queue_name is not None:
+    mapreduce_params['done_callback_queue'] = queue_name
   mapreduce_params['force_writes'] = 'True'
 
-  def tx():
-    operation = DatastoreAdminOperation.get(operation_key)
+  def tx(is_xg_transaction):
+    """Start MapReduce job and update datastore admin state.
+
+    Args:
+      is_xg_transaction: True if we are running inside a xg-enabled
+        transaction, else False if we are running inside a non-xg-enabled
+        transaction (which means the datastore admin state is updated in one
+        transaction and the MapReduce job in an indepedent transaction).
+    Returns:
+      result MapReduce job id as a string.
+    """
     job_id = control.start_map(
         job_name, handler_spec, reader_spec,
         mapper_params,
@@ -498,18 +532,27 @@ def StartMap(operation_key,
         mapreduce_parameters=mapreduce_params,
         base_path=config.MAPREDUCE_PATH,
         shard_count=shard_count,
-        transactional=True,
-        queue_name=queue_name,
-        transactional_parent=operation)
+        in_xg_transaction=is_xg_transaction,
+        queue_name=queue_name)
+    operation = DatastoreAdminOperation.get(operation_key)
     operation.status = DatastoreAdminOperation.STATUS_ACTIVE
     operation.active_jobs += 1
     operation.active_job_ids = list(set(operation.active_job_ids + [job_id]))
     operation.put(config=_CreateDatastoreConfig())
     return job_id
-  if start_transaction:
-    return db.run_in_transaction(tx)
+
+
+
+
+
+
+  datastore_type = datastore_rpc._GetDatastoreType()
+
+  if datastore_type != datastore_rpc.BaseConnection.MASTER_SLAVE_DATASTORE:
+    return db.run_in_transaction_options(
+        db.create_transaction_options(xg=True), tx, True)
   else:
-    return tx()
+    return db.run_in_transaction(tx, False)
 
 
 def RunMapForKinds(operation_key,
@@ -520,7 +563,8 @@ def RunMapForKinds(operation_key,
                    writer_spec,
                    mapper_params,
                    mapreduce_params=None,
-                   queue_name=None):
+                   queue_name=None,
+                   max_shard_count=None):
   """Run mapper job for all entities in specified kinds.
 
   Args:
@@ -534,6 +578,7 @@ def RunMapForKinds(operation_key,
     mapper_params: custom parameters to pass to mapper.
     mapreduce_params: dictionary parameters relevant to the whole job.
     queue_name: the name of the queue that will be used by the M/R.
+    max_shard_count: maximum value for shards count.
 
   Returns:
     Ids of all started mapper jobs as list of strings.
@@ -543,38 +588,50 @@ def RunMapForKinds(operation_key,
     for kind in kinds:
       mapper_params['entity_kind'] = kind
       job_name = job_name_template % {'kind': kind, 'namespace':
-                                      mapper_params.get('namespaces', '')}
-      shard_count = GetShardCount(kind)
+                                      mapper_params.get('namespace', '')}
+      shard_count = GetShardCount(kind, max_shard_count)
       jobs.append(StartMap(operation_key, job_name, handler_spec, reader_spec,
                            writer_spec, mapper_params, mapreduce_params,
                            queue_name=queue_name, shard_count=shard_count))
     return jobs
 
-  except BaseException:
+  except BaseException, ex:
     AbortAdminOperation(operation_key,
-                        _status=DatastoreAdminOperation.STATUS_FAILED)
+                        _status=DatastoreAdminOperation.STATUS_FAILED,
+                        _status_info='%s: %s' % (ex.__class__.__name__, ex))
     raise
 
 
-def GetShardCount(kind):
+def GetShardCount(kind, max_shard_count=None):
   stat = stats.KindStat.all().filter('kind_name =', kind).get()
   if stat:
 
-    return min(max(MAPREDUCE_MIN_SHARDS, stat.bytes // (32 * 1024 * 1024)),
-               MAPREDUCE_MAX_SHARDS)
+    shard_count = min(max(MAPREDUCE_MIN_SHARDS,
+                          stat.bytes // (32 * 1024 * 1024)),
+                      MAPREDUCE_MAX_SHARDS)
+    if max_shard_count and max_shard_count < shard_count:
+      shard_count = max_shard_count
+    return shard_count
 
   return MAPREDUCE_DEFAULT_SHARDS
 
 
 def AbortAdminOperation(operation_key,
-                        _status=DatastoreAdminOperation.STATUS_ABORTED):
+                        _status=DatastoreAdminOperation.STATUS_ABORTED,
+                        _status_info=''):
   """Aborts active jobs."""
   operation = DatastoreAdminOperation.get(operation_key)
   operation.status = _status
+  operation.status_info = _status_info
   operation.put(config=_CreateDatastoreConfig())
   for job in operation.active_job_ids:
     logging.info('Aborting Job %s', job)
     model.MapreduceControl.abort(job, config=_CreateDatastoreConfig())
+
+
+def get_kind_from_entity_pb(entity):
+  element_list = entity.key().path().element_list()
+  return element_list[-1].type() if element_list else None
 
 
 def FixKeys(entity_proto, app_id):
@@ -595,17 +652,17 @@ def FixKeys(entity_proto, app_id):
       if prop_value.has_referencevalue():
         FixKey(prop_value.mutable_referencevalue())
       elif prop.meaning() == entity_pb.Property.ENTITY_PROTO:
-        embeded_entity_proto = entity_pb.EntityProto()
+        embedded_entity_proto = entity_pb.EntityProto()
         try:
-          embeded_entity_proto.ParsePartialFromString(prop_value.stringvalue())
+          embedded_entity_proto.ParsePartialFromString(prop_value.stringvalue())
         except Exception:
           logging.exception('Failed to fix-keys for property %s of %s',
                             prop.name(),
                             entity_proto.key())
         else:
-          FixKeys(embeded_entity_proto, app_id)
+          FixKeys(embedded_entity_proto, app_id)
           prop_value.set_stringvalue(
-              embeded_entity_proto.SerializePartialToString())
+              embedded_entity_proto.SerializePartialToString())
 
 
   if entity_proto.has_key() and entity_proto.key().path().element_size():
@@ -615,74 +672,95 @@ def FixKeys(entity_proto, app_id):
   FixPropertyList(entity_proto.raw_property_list())
 
 
-class AllocateMaxIdPool(object):
-  """Mapper pool to keep track of all allocated ids.
+class ReserveKeyPool(object):
+  """Mapper pool which buffers keys with ids to reserve.
 
-  Runs allocate_ids rpcs when flushed.
-
-  This code uses the knowloedge of allocate_id implementation detail.
-  Though we don't plan to change allocate_id logic, we don't really
-  want to depend on it either. We are using this details here to implement
-  batch-style remote allocate_ids.
+  Runs v4 AllocateIds rpc(s) when flushed.
   """
 
-  def __init__(self, app_id):
-    self.app_id = app_id
+  def __init__(self):
+    self.keys = []
 
-    self.ns_to_path_to_max_id = collections.defaultdict(dict)
-
-  def allocate_max_id(self, key):
-    """Record the key to allocate max id.
-
-    Args:
-      key: Datastore key.
-    """
-    path = key.to_path()
-    if len(path) == 2:
-
-
-      path_tuple = ('Foo', 1)
-      key_id = path[-1]
-    else:
-
-
-      path_tuple = (path[0], path[1], 'Foo', 1)
-
-
-      key_id = None
-      for path_element in path[2:]:
-        if isinstance(path_element, (int, long)):
-          key_id = max(key_id, path_element)
-
-    if not isinstance(key_id, (int, long)):
-
-      return
-
-
-    path_to_max_id = self.ns_to_path_to_max_id[key.namespace()]
-    path_to_max_id[path_tuple] = max(key_id, path_to_max_id.get(path_tuple, 0))
+  def reserve_key(self, key):
+    for id_or_name in key.to_path()[1::2]:
+      if isinstance(id_or_name, (int, long)):
+        self.keys.append(key)
+        if len(self.keys) >= RESERVE_KEY_POOL_MAX_SIZE:
+          self.flush()
+        return
 
   def flush(self):
-    for namespace, path_to_max_id in self.ns_to_path_to_max_id.iteritems():
-      for path, max_id in path_to_max_id.iteritems():
-        datastore.AllocateIds(db.Key.from_path(namespace=namespace,
-                                               _app=self.app_id,
-                                               *list(path)),
-                              max=max_id)
-    self.ns_to_path_to_max_id = collections.defaultdict(dict)
+
+    datastore._GetConnection()._reserve_keys(self.keys)
+    self.keys = []
 
 
-class AllocateMaxId(operation.Operation):
-  """Mapper operation to allocate max id."""
+class ReserveKey(mr_operation.Operation):
+  """Mapper operation to reserve key ids."""
 
-  def __init__(self, key, app_id):
+  def __init__(self, key):
     self.key = key
-    self.app_id = app_id
-    self.pool_id = 'allocate_max_id_%s_pool' % self.app_id
+    self.app_id = key.app()
+    self.pool_id = 'reserve_key_%s_pool' % self.app_id
 
   def __call__(self, ctx):
     pool = ctx.get_pool(self.pool_id)
     if not pool:
-      pool = AllocateMaxIdPool(self.app_id)
+      pool = ReserveKeyPool()
       ctx.register_pool(self.pool_id, pool)
-    pool.allocate_max_id(self.key)
+    pool.reserve_key(self.key)
+
+
+class PutPool(context.Pool):
+  """A trimmed copy of the MutationPool class.
+
+  Properties:
+    puts: a list of entities to put to datastore.
+    max_entity_count: maximum number of entities before flushing it to db.
+  """
+  POOL_NAME = 'put_pool'
+
+  def __init__(self, max_entity_count=context.MAX_ENTITY_COUNT):
+    """Constructor.
+
+    Args:
+      max_entity_count: maximum number of entities before flushing it to db.
+    """
+    self.max_entity_count = max_entity_count
+    self.puts = []
+
+  def Put(self, entity):
+    """Registers entity to put to datastore.
+
+    Args:
+      entity: The EntityProto for the entity to be put.
+    """
+    if len(self.puts) >= self.max_entity_count:
+      self.flush()
+    self.puts.append(entity)
+
+  def flush(self):
+    """Flush all puts to datastore."""
+    if self.puts:
+      datastore_rpc.Connection(config=_CreateDatastoreConfig()).put(self.puts)
+    self.puts = []
+
+
+class Put(mr_operation.Operation):
+  """Mapper operation to batch puts."""
+
+  def __init__(self, entity):
+    """Constructor.
+
+    Args:
+      entity: The EntityProto of the entity to put.
+    """
+    self.entity = entity
+
+  def __call__(self, ctx):
+    pool = ctx.get_pool(PutPool.POOL_NAME)
+    if not pool:
+      pool = PutPool(
+          max_entity_count=(context.MAX_ENTITY_COUNT/(2**ctx.task_retry_count)))
+      ctx.register_pool(PutPool.POOL_NAME, pool)
+    pool.Put(self.entity)

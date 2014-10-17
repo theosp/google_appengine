@@ -16,8 +16,6 @@
 #
 
 
-
-
 """A Python Search API used by app developers.
 
 Contains methods used to interface with Search API.
@@ -29,8 +27,8 @@ Contains API classes that forward to apiproxy.
 
 
 
-
 import datetime
+import logging
 import re
 import string
 import sys
@@ -43,17 +41,20 @@ from google.appengine.api import namespace_manager
 from google.appengine.api.search import expression_parser
 from google.appengine.api.search import query_parser
 from google.appengine.api.search import search_service_pb
+from google.appengine.api.search import search_util
+from google.appengine.datastore import datastore_rpc
 from google.appengine.runtime import apiproxy_errors
 
 
 __all__ = [
-    'AddDocumentError',
-    'AddError',
-    'AddResult',
     'AtomField',
+    'ConcurrentTransactionError',
     'Cursor',
     'DateField',
+    'DeleteError',
+    'DeleteResult',
     'Document',
+    'DOCUMENT_ID_FIELD_NAME',
     'Error',
     'ExpressionError',
     'Field',
@@ -61,43 +62,51 @@ __all__ = [
     'HtmlField',
     'GeoField',
     'GeoPoint',
+    'get_indexes',
+    'get_indexes_async',
+    'GetResponse',
     'Index',
     'InternalError',
     'InvalidRequest',
-    'ListIndexesResponse',
-    'ListResponse',
+    'LANGUAGE_FIELD_NAME',
     'MatchScorer',
     'MAXIMUM_DOCUMENT_ID_LENGTH',
-    'MAXIMUM_DOCUMENTS_PER_ADD_REQUEST',
+    'MAXIMUM_DOCUMENTS_PER_PUT_REQUEST',
     'MAXIMUM_DOCUMENTS_RETURNED_PER_SEARCH',
     'MAXIMUM_EXPRESSION_LENGTH',
     'MAXIMUM_FIELD_ATOM_LENGTH',
     'MAXIMUM_FIELD_NAME_LENGTH',
     'MAXIMUM_FIELD_VALUE_LENGTH',
     'MAXIMUM_FIELDS_RETURNED_PER_SEARCH',
+    'MAXIMUM_GET_INDEXES_OFFSET',
     'MAXIMUM_INDEX_NAME_LENGTH',
-    'MAXIMUM_INDEXES_RETURNED_PER_LIST_REQUEST',
-    'MAXIMUM_LIST_INDEXES_OFFSET',
+    'MAXIMUM_INDEXES_RETURNED_PER_GET_REQUEST',
     'MAXIMUM_NUMBER_FOUND_ACCURACY',
     'MAXIMUM_QUERY_LENGTH',
     'MAXIMUM_SEARCH_OFFSET',
     'MAXIMUM_SORTED_DOCUMENTS',
+    'MAX_DATE',
+    'MAX_NUMBER_VALUE',
+    'MIN_DATE',
+    'MIN_NUMBER_VALUE',
     'NumberField',
     'OperationResult',
+    'PutError',
+    'PutResult',
     'Query',
     'QueryError',
     'QueryOptions',
-    'RemoveDocumentError',
-    'RemoveError',
-    'RemoveResult',
+    'RANK_FIELD_NAME',
     'RescoringMatchScorer',
+    'SCORE_FIELD_NAME',
     'ScoredDocument',
     'SearchResults',
     'SortExpression',
     'SortOptions',
     'TextField',
+    'Timeout',
+    'TIMESTAMP_FIELD_NAME',
     'TransientError',
-    'list_indexes',
     ]
 
 MAXIMUM_INDEX_NAME_LENGTH = 100
@@ -105,7 +114,7 @@ MAXIMUM_FIELD_VALUE_LENGTH = 1024 * 1024
 MAXIMUM_FIELD_ATOM_LENGTH = 500
 MAXIMUM_FIELD_NAME_LENGTH = 500
 MAXIMUM_DOCUMENT_ID_LENGTH = 500
-MAXIMUM_DOCUMENTS_PER_ADD_REQUEST = 200
+MAXIMUM_DOCUMENTS_PER_PUT_REQUEST = 200
 MAXIMUM_EXPRESSION_LENGTH = 5000
 MAXIMUM_QUERY_LENGTH = 2000
 MAXIMUM_DOCUMENTS_RETURNED_PER_SEARCH = 1000
@@ -114,9 +123,27 @@ MAXIMUM_SEARCH_OFFSET = 1000
 MAXIMUM_SORTED_DOCUMENTS = 10000
 MAXIMUM_NUMBER_FOUND_ACCURACY = 10000
 MAXIMUM_FIELDS_RETURNED_PER_SEARCH = 100
-MAXIMUM_INDEXES_RETURNED_PER_LIST_REQUEST = 1000
-MAXIMUM_LIST_INDEXES_OFFSET = 1000
-_LANGUAGE_LENGTH = 2
+MAXIMUM_INDEXES_RETURNED_PER_GET_REQUEST = 1000
+MAXIMUM_GET_INDEXES_OFFSET = 1000
+
+
+DOCUMENT_ID_FIELD_NAME = '_doc_id'
+
+LANGUAGE_FIELD_NAME = '_lang'
+
+RANK_FIELD_NAME = '_rank'
+
+SCORE_FIELD_NAME = '_score'
+
+
+
+TIMESTAMP_FIELD_NAME = '_timestamp'
+
+
+
+
+_LANGUAGE_RE = re.compile('^(.{2}|.{2}_.{2})$')
+
 _MAXIMUM_STRING_LENGTH = 500
 _MAXIMUM_CURSOR_LENGTH = 10000
 
@@ -124,7 +151,14 @@ _VISIBLE_PRINTABLE_ASCII = frozenset(
     set(string.printable) - set(string.whitespace))
 _FIELD_NAME_PATTERN = '^[A-Za-z][A-Za-z0-9_]*$'
 
-_BASE_DATE = datetime.date(1970, 1, 1)
+MAX_DATE = datetime.datetime(
+    datetime.MAXYEAR, 12, 31, 23, 59, 59, 999999, tzinfo=None)
+MIN_DATE = datetime.datetime(
+    datetime.MINYEAR, 1, 1, 0, 0, 0, 0, tzinfo=None)
+
+
+MAX_NUMBER_VALUE = 2147483647
+MIN_NUMBER_VALUE = -2147483647
 
 
 _PROTO_FIELDS_STRING_VALUE = frozenset([document_pb.FieldValue.TEXT,
@@ -156,6 +190,14 @@ class ExpressionError(Error):
   """An error occurred while parsing an expression input string."""
 
 
+class Timeout(Error):
+  """Indicates a call on the search API could not finish before its deadline."""
+
+
+class ConcurrentTransactionError(Error):
+  """Indicates a call on the search API failed due to concurrent updates."""
+
+
 def _ConvertToUnicode(some_string):
   """Convert UTF-8 encoded string to unicode."""
   if some_string is None:
@@ -172,16 +214,68 @@ def _ConcatenateErrorMessages(prefix, status):
   return prefix
 
 
+class _RpcOperationFuture(object):
+  """Represents the future result a search RPC sent to a backend."""
+
+  def __init__(self, call, request, response, deadline, get_result_hook):
+    """Initializer.
+
+    Args:
+      call: Method name to call, as a string
+      request: The request object
+      response: The response object
+      deadline: Deadline for RPC call in seconds; if None use the default.
+      get_result_hook: Required result hook. Must be a function that takes
+        no arguments. Its return value is returned by get_result().
+    """
+    _ValidateDeadline(deadline)
+    self._get_result_hook = get_result_hook
+    self._rpc = apiproxy_stub_map.UserRPC('search', deadline=deadline)
+    self._rpc.make_call(call, request, response)
+
+  def get_result(self):
+    self._rpc.wait();
+    try:
+      self._rpc.check_success();
+    except apiproxy_errors.ApplicationError, e:
+      raise _ToSearchError(e)
+    return self._get_result_hook()
+
+
+class _SimpleOperationFuture(object):
+  """Adapts a late-binding function to a future."""
+
+  def __init__(self, future, function):
+    self._future = future
+    self._function = function
+
+  def get_result(self):
+    return self._function(self._future.get_result())
+
+
+class _WrappedValueFuture(object):
+  """Adapts an immediately-known result to a future."""
+
+  def __init__(self, result):
+    self._result = result
+
+  def get_result(self):
+    return self._result
+
+
 class OperationResult(object):
   """Represents result of individual operation of a batch index or removal.
 
   This is an abstract class.
   """
 
-  OK, INVALID_REQUEST, TRANSIENT_ERROR, INTERNAL_ERROR = (
-      'OK', 'INVALID_REQUEST', 'TRANSIENT_ERROR', 'INTERNAL_ERROR')
+  (OK, INVALID_REQUEST, TRANSIENT_ERROR, INTERNAL_ERROR,
+  TIMEOUT,  CONCURRENT_TRANSACTION) = (
+      'OK', 'INVALID_REQUEST', 'TRANSIENT_ERROR', 'INTERNAL_ERROR',
+      'TIMEOUT', 'CONCURRENT_TRANSACTION')
 
-  _CODES = frozenset([OK, INVALID_REQUEST, TRANSIENT_ERROR, INTERNAL_ERROR])
+  _CODES = frozenset([OK, INVALID_REQUEST, TRANSIENT_ERROR, INTERNAL_ERROR,
+                      TIMEOUT, CONCURRENT_TRANSACTION])
 
   def __init__(self, code, message=None, id=None):
     """Initializer.
@@ -213,32 +307,6 @@ class OperationResult(object):
     return self._message
 
   @property
-  def document_id(self):
-    """Returns the Id of the document the operation was performed on.
-
-    Deprecated. Use id instead.
-
-    Returns:
-      the Id.
-    """
-    warnings.warn('document_id is deprecated. Use id instead',
-                  DeprecationWarning, stacklevel=2)
-    return self._id
-
-  @property
-  def object_id(self):
-    """Returns the Id of the object the operation was performed on.
-
-    Deprecated. Use id instead.
-
-    Returns:
-      the Id.
-    """
-    warnings.warn('object_id is deprecated. Use id instead',
-                  DeprecationWarning, stacklevel=2)
-    return self._id
-
-  @property
   def id(self):
     """Returns the Id of the object the operation was performed on."""
     return self._id
@@ -255,23 +323,24 @@ _ERROR_OPERATION_CODE_MAP = {
     search_service_pb.SearchServiceError.TRANSIENT_ERROR:
     OperationResult.TRANSIENT_ERROR,
     search_service_pb.SearchServiceError.INTERNAL_ERROR:
-    OperationResult.INTERNAL_ERROR
+    OperationResult.INTERNAL_ERROR,
+    search_service_pb.SearchServiceError.TIMEOUT:
+    OperationResult.TIMEOUT,
+    search_service_pb.SearchServiceError.CONCURRENT_TRANSACTION:
+    OperationResult.CONCURRENT_TRANSACTION,
     }
 
 
-class AddResult(OperationResult):
+class PutResult(OperationResult):
   """The result of indexing a single object."""
 
 
-class RemoveResult(OperationResult):
+class DeleteResult(OperationResult):
   """The result of deleting a single document."""
 
 
-class AddDocumentError(Error):
-  """Indicates some error occurred indexing one of the objects requested.
-
-  Deprecated. Use AddError instead.
-  """
+class PutError(Error):
+  """Indicates some error occurred indexing one of the objects requested."""
 
   def __init__(self, message, results):
     """Initializer.
@@ -279,81 +348,46 @@ class AddDocumentError(Error):
     Args:
       message: A message detailing the cause of the failure to index some
         document.
-      results: A list of AddResult corresponding to the list of objects
+      results: A list of PutResult corresponding to the list of objects
         requested to be indexed.
     """
-    super(AddDocumentError, self).__init__(message)
+    super(PutError, self).__init__(message)
     self._results = results
 
   @property
-  def document_results(self):
-    """Returns AddResult list corresponding to Documents indexed.
-
-    Deprecated. Use AddError.results.
-
-    Returns:
-      The list of AddResult.
-    """
-    warnings.warn('document_results is deprecated. Use results instead. '
-                  '"except AddDocumentError" is deprecated. Use '
-                  '"except AddError" instead.',
-                  DeprecationWarning, stacklevel=2)
-    return self._results
-
-
-class AddError(AddDocumentError):
-  """Indicates some error occurred indexing one of the objects requested."""
-
-  @property
   def results(self):
-    """Returns AddResult list corresponding to objects indexed."""
+    """Returns PutResult list corresponding to objects indexed."""
     return self._results
 
 
-class RemoveDocumentError(Error):
+class DeleteError(Error):
   """Indicates some error occured deleting one of the objects requested."""
 
   def __init__(self, message, results):
     """Initializer.
 
     Args:
-      message: A message detailing the cause of the failure to remove some
+      message: A message detailing the cause of the failure to delete some
         document.
-      results: A list of RemoveResult corresponding to the list of Ids of
-        objects requested to be removed.
+      results: A list of DeleteResult corresponding to the list of Ids of
+        objects requested to be deleted.
     """
-    super(RemoveDocumentError, self).__init__(message)
+    super(DeleteError, self).__init__(message)
     self._results = results
 
   @property
-  def document_results(self):
-    """Returns RemoveResult list corresponding to Documents removed.
-
-    Deprecated. Use RemoveError.results.
-
-    Returns:
-      The list of RemoveResult.
-    """
-    warnings.warn('document_results is deprecated. Use results instead. '
-                  '"except RemoveDocumentError" is deprecated. Use '
-                  '"except RemoveError" instead.',
-                  DeprecationWarning, stacklevel=2)
-    return self._results
-
-
-class RemoveError(RemoveDocumentError):
-  """Indicates some error occured deleting one of the objects requested."""
-
-  @property
   def results(self):
-    """Returns RemoveResult list corresponding to Documents removed."""
+    """Returns DeleteResult list corresponding to Documents deleted."""
     return self._results
 
 
 _ERROR_MAP = {
     search_service_pb.SearchServiceError.INVALID_REQUEST: InvalidRequest,
     search_service_pb.SearchServiceError.TRANSIENT_ERROR: TransientError,
-    search_service_pb.SearchServiceError.INTERNAL_ERROR: InternalError
+    search_service_pb.SearchServiceError.INTERNAL_ERROR: InternalError,
+    search_service_pb.SearchServiceError.TIMEOUT: Timeout,
+    search_service_pb.SearchServiceError.CONCURRENT_TRANSACTION:
+    ConcurrentTransactionError,
     }
 
 
@@ -556,7 +590,7 @@ def _CheckFieldNames(names):
 
 
 def _GetList(a_list):
-  """Utility function that conversts None to the empty list."""
+  """Utility function that converts None to the empty list."""
   if a_list is None:
     return []
   else:
@@ -608,28 +642,65 @@ def _CheckAtom(atom):
 
 
 def _CheckDate(date):
-  """Checks the date is a datetime.date, but not a datetime.datetime."""
-  if not isinstance(date, datetime.date) or isinstance(date, datetime.datetime):
-    raise TypeError('date must be a date but not a datetime, got %s' %
-                    date.__class__.__name__)
+  """Checks the date is in the correct range."""
+  if isinstance(date, datetime.datetime):
+    if date < MIN_DATE or date > MAX_DATE:
+      raise TypeError('date must be between %s and %s (got %s)' %
+                      (MIN_DATE, MAX_DATE, date))
+  elif isinstance(date, datetime.date):
+    if date < MIN_DATE.date() or date > MAX_DATE.date():
+      raise TypeError('date must be between %s and %s (got %s)' %
+                      (MIN_DATE, MAX_DATE, date))
+  else:
+    raise TypeError('date must be datetime.datetime or datetime.date')
   return date
 
 
 def _CheckLanguage(language):
-  """Checks language is None or a string of _LANGUAGE_LENGTH."""
+  """Checks language is None or a string that matches _LANGUAGE_RE."""
   if language is None:
     return None
   if not isinstance(language, basestring):
     raise TypeError('language must be a basestring, got %s' %
                     language.__class__.__name__)
-  if len(language) != _LANGUAGE_LENGTH:
-    raise ValueError('language should have a length of %d, got %s'
-                     % (_LANGUAGE_LENGTH, len(language)))
+  if not re.match(_LANGUAGE_RE, language):
+    raise ValueError('invalid language %s. Languages should be two letters.'
+                     % language)
   return language
 
 
+def _CheckDocument(document):
+  """Check that the document is valid.
+
+  This checks for all server-side requirements on Documents. Currently, that
+  means ensuring that there are no repeated number or date fields.
+
+  Args:
+    document: The search.Document to check for validity.
+
+  Raises:
+    ValueError if the document is invalid in a way that would trigger an
+    PutError from the server.
+  """
+  no_repeat_date_names = set()
+  no_repeat_number_names = set()
+  for field in document.fields:
+    if isinstance(field, NumberField):
+      if field.name in no_repeat_number_names:
+        raise ValueError(
+            'Invalid document %s: field %s with type date or number may not '
+            'be repeated.' % (document.doc_id, field.name))
+      no_repeat_number_names.add(field.name)
+    elif isinstance(field, DateField):
+      if field.name in no_repeat_date_names:
+        raise ValueError(
+            'Invalid document %s: field %s with type date or number may not '
+            'be repeated.' % (document.doc_id, field.name))
+      no_repeat_date_names.add(field.name)
+
+
 def _CheckSortLimit(limit):
-  """Checks the limit on number of docs to score is not too large."""
+  """Checks the limit on number of docs to score or sort is not too large."""
   return _CheckInteger(limit, 'limit', upper_bound=MAXIMUM_SORTED_DOCUMENTS)
 
 
@@ -640,16 +711,18 @@ def _Repr(class_instance, ordered_dictionary):
        if value is not None and value != []]))
 
 
-def _ListIndexesResponseToList(response):
-  """Returns a ListIndexesResponse constructed from list_indexes response pb."""
-  return ListIndexesResponse(
-      indexes=[_NewIndexFromPb(index)
+def _ListIndexesResponsePbToGetResponse(response):
+  """Returns a GetResponse constructed from get_indexes response pb."""
+  return GetResponse(
+      results=[_NewIndexFromPb(index)
                for index in response.index_metadata_list()])
 
 
-def list_indexes(namespace='', offset=None, limit=20,
-                 start_index_name=None, include_start_index=True,
-                 index_name_prefix=None, fetch_schema=False, **kwargs):
+@datastore_rpc._positional(7)
+def get_indexes(namespace='', offset=None, limit=20,
+                start_index_name=None, include_start_index=True,
+                index_name_prefix=None, fetch_schema=False, deadline=None,
+                **kwargs):
   """Returns a list of available indexes.
 
   Args:
@@ -662,17 +735,38 @@ def list_indexes(namespace='', offset=None, limit=20,
     index_name_prefix: The prefix used to select returned indexes.
     fetch_schema: Whether to retrieve Schema for each Index or not.
 
+  Kwargs:
+    deadline: Deadline for RPC call in seconds; if None use the default.
+
   Returns:
-    The ListIndexesResponse containing a list of available indexes.
+    The GetResponse containing a list of available indexes.
 
   Raises:
     InternalError: If the request fails on internal servers.
-    TypeError: If an invalid argument is passed.
+    TypeError: If any of the parameters have invalid types, or an unknown
+      attribute is passed.
+    ValueError: If any of the parameters have invalid values (e.g., a
+      negative deadline).
   """
-  args_diff = set(kwargs.iterkeys()) - frozenset(['app_id'])
-  if args_diff:
-    raise TypeError('Invalid arguments: %s' % ', '.join(args_diff))
+  return get_indexes_async(
+      namespace, offset, limit, start_index_name, include_start_index,
+      index_name_prefix, fetch_schema, deadline=deadline, **kwargs).get_result()
 
+
+@datastore_rpc._positional(7)
+def get_indexes_async(namespace='', offset=None, limit=20,
+                      start_index_name=None, include_start_index=True,
+                      index_name_prefix=None, fetch_schema=False, deadline=None,
+                      **kwargs):
+  """Asynchronously returns a list of available indexes.
+
+  Identical to get_indexes() except that it returns a future. Call
+  get_result() on the return value to block on the call and get its result.
+  """
+
+  app_id = kwargs.pop('app_id', None)
+  if kwargs:
+    raise TypeError('Invalid arguments: %s' % ', '.join(kwargs))
 
   request = search_service_pb.ListIndexesRequest()
   params = request.mutable_params()
@@ -685,36 +779,33 @@ def list_indexes(namespace='', offset=None, limit=20,
   params.set_namespace(namespace)
   if offset is not None:
     params.set_offset(_CheckInteger(offset, 'offset', zero_ok=True,
-                                    upper_bound=MAXIMUM_LIST_INDEXES_OFFSET))
+                                    upper_bound=MAXIMUM_GET_INDEXES_OFFSET))
   params.set_limit(_CheckInteger(
       limit, 'limit', zero_ok=False,
-      upper_bound=MAXIMUM_INDEXES_RETURNED_PER_LIST_REQUEST))
+      upper_bound=MAXIMUM_INDEXES_RETURNED_PER_GET_REQUEST))
   if start_index_name is not None:
     params.set_start_index_name(
-        _ValidateString(start_index_name, "start_index_name",
+        _ValidateString(start_index_name, 'start_index_name',
                         MAXIMUM_INDEX_NAME_LENGTH,
                         empty_ok=False))
   if include_start_index is not None:
     params.set_include_start_index(bool(include_start_index))
   if index_name_prefix is not None:
     params.set_index_name_prefix(
-        _ValidateString(index_name_prefix, "index_name_prefix",
+        _ValidateString(index_name_prefix, 'index_name_prefix',
                         MAXIMUM_INDEX_NAME_LENGTH,
                         empty_ok=False))
   params.set_fetch_schema(fetch_schema)
 
   response = search_service_pb.ListIndexesResponse()
-  if 'app_id' in kwargs:
-    request.set_app_id(kwargs.get('app_id'))
+  if app_id:
+    request.set_app_id(app_id)
 
-  try:
-    apiproxy_stub_map.MakeSyncCall('search', 'ListIndexes', request, response)
-  except apiproxy_errors.ApplicationError, e:
-    raise _ToSearchError(e)
-
-  _CheckStatus(response.status())
-
-  return _ListIndexesResponseToList(response)
+  def hook():
+    _CheckStatus(response.status())
+    return _ListIndexesResponsePbToGetResponse(response)
+  return _RpcOperationFuture(
+      'ListIndexes', request, response, deadline, hook)
 
 
 class Field(object):
@@ -901,9 +992,9 @@ class AtomField(Field):
 
 
 class DateField(Field):
-  """A Field that has a date value.
+  """A Field that has a date or datetime value.
 
-  The following example shows an date field named creation_date:
+  The following example shows a date field named creation_date:
     DateField(name='creation_date', value=datetime.date(2011, 03, 11))
   """
 
@@ -912,10 +1003,10 @@ class DateField(Field):
 
     Args:
       name: The name of the field.
-      value: A datetime.date but not a datetime.datetime.
+      value: A datetime.date or a datetime.datetime.
 
     Raises:
-      TypeError: If value is not a datetime.date or is a datetime.datetime.
+      TypeError: If value is not a datetime.date or a datetime.datetime.
     """
     Field.__init__(self, name, value)
 
@@ -924,7 +1015,7 @@ class DateField(Field):
 
   def _CopyValueToProtocolBuffer(self, field_value_pb):
     field_value_pb.set_type(document_pb.FieldValue.DATE)
-    field_value_pb.set_string_value(self.value.isoformat())
+    field_value_pb.set_string_value(search_util.SerializeDate(self.value))
 
 
 class NumberField(Field):
@@ -933,11 +1024,6 @@ class NumberField(Field):
   The following example shows a number field named size:
     NumberField(name='size', value=10)
   """
-
-  _MAX_NUMBER_VALUE = 2147483647
-
-
-  _MIN_NUMBER_VALUE = -2147483647
 
   def __init__(self, name, value=None):
     """Initializer.
@@ -954,11 +1040,10 @@ class NumberField(Field):
 
   def _CheckValue(self, value):
     value = _CheckNumber(value, 'field value')
-    if value is not None and (value < NumberField._MIN_NUMBER_VALUE or
-                              value > NumberField._MAX_NUMBER_VALUE):
+    if value is not None and (value < MIN_NUMBER_VALUE or
+                              value > MAX_NUMBER_VALUE):
       raise ValueError('value, %d must be between %d and %d' %
-                       (value, NumberField._MIN_NUMBER_VALUE,
-                        NumberField._MAX_NUMBER_VALUE))
+                       (value, MIN_NUMBER_VALUE, MAX_NUMBER_VALUE))
     return value
 
   def _CopyValueToProtocolBuffer(self, field_value_pb):
@@ -1004,11 +1089,15 @@ class GeoPoint(object):
     return value
 
   def _CheckLongitude(self, value):
-    _CheckNumber(value, 'latitude')
+    _CheckNumber(value, 'longitude')
     if value < -180.0 or value > 180.0:
       raise ValueError('longitude must be between -180 and 180 degrees '
                        'inclusive, was %f' % value)
     return value
+
+  def __eq__(self, other):
+    return (self.latitude == other.latitude and
+      self.longitude == other.longitude)
 
   def __repr__(self):
     return _Repr(self,
@@ -1062,8 +1151,7 @@ def _GetValue(value_pb):
     return None
   if value_pb.type() == document_pb.FieldValue.DATE:
     if value_pb.has_string_value():
-      return datetime.datetime.strptime(value_pb.string_value(),
-                                        '%Y-%m-%d').date()
+      return search_util.DeserializeDate(value_pb.string_value())
     return None
   if value_pb.type() == document_pb.FieldValue.NUMBER:
     if value_pb.has_string_value():
@@ -1135,8 +1223,7 @@ class Document(object):
   """
   _FIRST_JAN_2011 = datetime.datetime(2011, 1, 1)
 
-  def __init__(self, doc_id=None, fields=None, language='en', order_id=None,
-               rank=None):
+  def __init__(self, doc_id=None, fields=None, language='en', rank=None):
     """Initializer.
 
     Args:
@@ -1146,7 +1233,6 @@ class Document(object):
       fields: An iterable of Field instances representing the content of the
         document.
       language: The code of the language used in the field values.
-      order_id: Same as rank, deprecated.
       rank: The rank of this document used to specify the order in which
         documents are returned by search. Rank must be a non-negative integer.
         If not specified, the number of seconds since 1st Jan 2011 is used.
@@ -1165,20 +1251,15 @@ class Document(object):
     self._fields = _GetList(fields)
     self._language = _CheckLanguage(_ConvertToUnicode(language))
 
-    doc_rank = None
-    if not order_id is None:
 
-      warnings.warn('order_id is deprecated; use rank instead',
-                    DeprecationWarning, stacklevel=2)
-      doc_rank = order_id
-    if not rank is None:
-      if not doc_rank is None:
-        warnings.warn('Both order_id and rank are set; use just rank',
-                      DeprecationWarning, stacklevel=2)
-      doc_rank = rank
+    self._field_map = None
+
+    doc_rank = rank
     if doc_rank is None:
       doc_rank = self._GetDefaultRank()
     self._rank = self._CheckRank(doc_rank)
+
+    _CheckDocument(self)
 
   @property
   def doc_id(self):
@@ -1196,16 +1277,55 @@ class Document(object):
     return self._language
 
   @property
-  def order_id(self):
-    """Returns the id used to return documents in a defined order."""
-    warnings.warn('order_id is deprecated; use rank instead',
-                  DeprecationWarning, stacklevel=2)
-    return self._rank
-
-  @property
   def rank(self):
     """Returns the rank of this document."""
     return self._rank
+
+  def field(self, field_name):
+    """Returns the field with the provided field name.
+
+    Args:
+      field_name: The name of the field to return.
+
+    Returns:
+      A field with the given name.
+
+    Raises:
+      ValueError: There is not exactly one field with the given name.
+    """
+    fields = self[field_name]
+    if len(fields) == 1:
+      return fields[0]
+    raise ValueError(
+        'Must have exactly one field with name %s, but found %d.' %
+        (field_name, len(fields)))
+
+  def __getitem__(self, field_name):
+    """Returns a list of all fields with the provided field name.
+
+    Args:
+      field_name: The name of the field to return.
+
+    Returns:
+      All fields with the given name, or an empty list if no field with that
+      name exists.
+    """
+    return self._BuildFieldMap().get(field_name, [])
+
+  def __iter__(self):
+    """Documents do not support iteration.
+
+    This is provided to raise an explicit exception.
+    """
+    raise TypeError('Documents do not support iteration.')
+
+  def _BuildFieldMap(self):
+    """Lazily build the field map."""
+    if self._field_map is None:
+      self._field_map = {}
+      for field in self._fields:
+        self._field_map.setdefault(field.name, []).append(field)
+    return self._field_map
 
   def _CheckRank(self, rank):
     """Checks if rank is valid, then returns it."""
@@ -1355,8 +1475,7 @@ class SortOptions(object):
         multi-dimensional sort of Documents.
       match_scorer: A match scorer specification which may be used to
         score documents or in a SortExpression combined with other features.
-      limit: The limit on the number of documents to score. It is advisable
-        to set this limit on large indexes.
+      limit: The limit on the number of documents to score or sort.
 
     Raises:
       TypeError: If any of the parameters has an invalid type, or an unknown
@@ -1383,7 +1502,7 @@ class SortOptions(object):
 
   @property
   def limit(self):
-    """Returns the limit on the number of documents to score."""
+    """Returns the limit on the number of documents to score or sort."""
     return self._limit
 
   def __repr__(self):
@@ -1460,13 +1579,15 @@ def _CopySortExpressionToProtocolBuffer(sort_expression, pb):
   pb.set_sort_expression(sort_expression.expression.encode('utf-8'))
   if sort_expression.direction == SortExpression.ASCENDING:
     pb.set_sort_descending(False)
-  if isinstance(sort_expression.default_value, basestring):
-    pb.set_default_value_text(sort_expression.default_value.encode('utf-8'))
-  elif isinstance(sort_expression.default_value, datetime.date):
-    pb.set_default_value_numeric(
-        (sort_expression.default_value - _BASE_DATE).days)
-  else:
-    pb.set_default_value_numeric(sort_expression.default_value)
+  if sort_expression.default_value is not None:
+    if isinstance(sort_expression.default_value, basestring):
+      pb.set_default_value_text(sort_expression.default_value.encode('utf-8'))
+    elif (isinstance(sort_expression.default_value, datetime.datetime) or
+          isinstance(sort_expression.default_value, datetime.date)):
+      pb.set_default_value_text(str(
+          search_util.EpochTime(sort_expression.default_value)))
+    else:
+      pb.set_default_value_numeric(sort_expression.default_value)
   return pb
 
 
@@ -1537,7 +1658,7 @@ class SortExpression(object):
 
   _DIRECTIONS = frozenset([ASCENDING, DESCENDING])
 
-  def __init__(self, expression, direction=DESCENDING, default_value=''):
+  def __init__(self, expression, direction=DESCENDING, default_value=None):
     """Initializer.
 
     Args:
@@ -1569,12 +1690,14 @@ class SortExpression(object):
       raise TypeError('expression must be a SortExpression, got None')
     _CheckExpression(self._expression)
     self._default_value = default_value
-    if isinstance(self.default_value, basestring):
-      self._default_value = _ConvertToUnicode(default_value)
-      _CheckText(self._default_value, 'default_value')
-    elif not isinstance(self._default_value, (int, long, float, datetime.date)):
-      raise TypeError('default_value must be text, numeric or date, got %s' %
-                      self._default_value.__class__.__name__)
+    if self._default_value is not None:
+      if isinstance(self.default_value, basestring):
+        self._default_value = _ConvertToUnicode(default_value)
+        _CheckText(self._default_value, 'default_value')
+      elif not isinstance(self._default_value,
+                          (int, long, float, datetime.date, datetime.datetime)):
+        raise TypeError('default_value must be text, numeric or datetime, got '
+                        '%s' % self._default_value.__class__.__name__)
 
   @property
   def expression(self):
@@ -1605,7 +1728,7 @@ class SortExpression(object):
 class ScoredDocument(Document):
   """Represents a scored document returned from a search."""
 
-  def __init__(self, doc_id=None, fields=None, language='en', order_id=None,
+  def __init__(self, doc_id=None, fields=None, language='en',
                sort_scores=None, expressions=None, cursor=None, rank=None):
     """Initializer.
 
@@ -1616,17 +1739,16 @@ class ScoredDocument(Document):
       fields: An iterable of Field instances representing the content of the
         document.
       language: The code of the language used in the field values.
-      order_id: Same as rank, deprecated.
-      rank: The rank of this document. A rank must be a non-negative integer
-        less than sys.maxint. If not specified, the number of seconds since
-        1st Jan 2011 is used. Documents are returned in descending order of
-        their rank.
       sort_scores: The list of scores assigned during sort evaluation. Each
         sort dimension is included. Positive scores are used for ascending
         sorts; negative scores for descending.
       expressions: The list of computed fields which are the result of
         expressions requested.
       cursor: A cursor associated with the document.
+      rank: The rank of this document. A rank must be a non-negative integer
+        less than sys.maxint. If not specified, the number of seconds since
+        1st Jan 2011 is used. Documents are returned in descending order of
+        their rank.
 
     Raises:
       TypeError: If any of the parameters have invalid types, or an unknown
@@ -1634,8 +1756,7 @@ class ScoredDocument(Document):
       ValueError: If any of the parameters have invalid values.
     """
     super(ScoredDocument, self).__init__(doc_id=doc_id, fields=fields,
-                                         language=language, order_id=order_id,
-                                         rank=rank)
+                                         language=language, rank=rank)
     self._sort_scores = self._CheckSortScores(_GetList(sort_scores))
     self._expressions = _GetList(expressions)
     if cursor is not None and not isinstance(cursor, Cursor):
@@ -1766,13 +1887,13 @@ class SearchResults(object):
                         ('cursor', self.cursor)])
 
 
-class ListResponse(object):
-  """Represents the result of executing a list request on an index.
+class GetResponse(object):
+  """Represents the result of executing a get request.
 
   For example, the following code shows how a response could be used
   to determine which documents were successfully removed or not.
 
-  response = index.list_documents()
+  response = index.get_range()
   for document in response:
     print "document ", document
   """
@@ -1795,63 +1916,12 @@ class ListResponse(object):
       yield result
 
   @property
-  def documents(self):
-    """Returns a list of documents ordered by Id from the index.
-
-    Deprecated. Use ListResponse.results.
-
-    Returns:
-      the list of documents
-    """
-    warnings.warn('documents is deprecated. '
-                  'Use ListResponse.results instead',
-                  DeprecationWarning, stacklevel=2)
-    return self._results
-
-  @property
   def results(self):
     """Returns a list of results ordered by Id from the index."""
     return self._results
 
   def __repr__(self):
     return _Repr(self, [('results', self.results)])
-
-
-class ListIndexesResponse(object):
-  """Represents the result of executing a list indexes request.
-
-  For example, the following code shows how the response can be
-  used to get available Indexes.
-
-  for index in search.list_indexes(fetch_schema=True):
-    print "index ", index.name
-    print index.schema
-  """
-
-  def __init__(self, indexes=None):
-    """Initializer.
-
-    Args:
-      indexes: A list of available Indexes.
-
-    Raises:
-      TypeError: If any of the parameters have an invalid type, or an unknown
-        attribute is passed.
-      ValueError: If any of the parameters have an invalid value.
-    """
-    self._indexes = _GetList(indexes)
-
-  def __iter__(self):
-    for index in self.indexes:
-      yield index
-
-  @property
-  def indexes(self):
-    """Returns a list of available Indexes."""
-    return self._indexes
-
-  def __repr__(self):
-    return _Repr(self, [('indexes', self.indexes)])
 
 
 class Cursor(object):
@@ -1864,7 +1934,7 @@ class Cursor(object):
 
   The following shows how to use the cursor to get the next page of results:
 
-  # get the first set of results, the first cursor is used to specify
+  # get the first set of results; the first cursor is used to specify
   # that cursors are to be returned in the SearchResults.
   results = index.search(Query(query_string='some stuff',
       QueryOptions(cursor=Cursor()))
@@ -1876,7 +1946,7 @@ class Cursor(object):
   If you want to continue search from any one of the ScoredDocuments in
   SearchResults, then you can set Cursor.per_result to True.
 
-  # get the first set of results, the first cursor is used to specify
+  # get the first set of results; the first cursor is used to specify
   # that cursors are to be returned in the SearchResults.
   results = index.search(Query(query_string='some stuff',
       QueryOptions(cursor=Cursor(per_result=True)))
@@ -2014,7 +2084,7 @@ class QueryOptions(object):
       QueryOptions(limit=page_size, offset=next_page))
   """
 
-  def __init__(self, limit=20, number_found_accuracy=100, cursor=None,
+  def __init__(self, limit=20, number_found_accuracy=None, cursor=None,
                offset=None, sort_options=None, returned_fields=None,
                ids_only=False, snippeted_fields=None,
                returned_expressions=None):
@@ -2161,7 +2231,7 @@ def _CopyQueryOptionsObjectToProtocolBuffer(query, options, params):
   """Copies a QueryOptions object to a SearchParams proto buff."""
   offset = 0
   web_safe_string = None
-  cursor_type = search_service_pb.SearchParams.NONE
+  cursor_type = None
   offset = options.offset
   if options.cursor:
     cursor = options.cursor
@@ -2186,11 +2256,12 @@ def _CopyQueryOptionsToProtocolBuffer(
   if offset:
     params.set_offset(offset)
   params.set_limit(limit)
-  params.set_matched_count_accuracy(number_found_accuracy)
+  if number_found_accuracy is not None:
+    params.set_matched_count_accuracy(number_found_accuracy)
   if cursor:
     params.set_cursor(cursor.encode('utf-8'))
-
-  params.set_cursor_type(cursor_type)
+  if cursor_type is not None:
+    params.set_cursor_type(cursor_type)
   if ids_only:
     params.set_keys_only(ids_only)
   if returned_fields or snippeted_fields or returned_expressions:
@@ -2302,8 +2373,7 @@ class Index(object):
   index for documents matching a query.
 
     # Get the index.
-    index = Index(name='index-name',
-                  consistency=Index.PER_DOCUMENT_CONSISTENT)
+    index = Index(name='index-name')
 
     # Create a document.
     doc = Document(doc_id='document-id',
@@ -2313,7 +2383,7 @@ class Index(object):
 
     # Index the document.
     try:
-      index.add(doc)
+      index.put(doc)
     except search.Error, e:
       # possibly retry indexing or log error
 
@@ -2329,30 +2399,11 @@ class Index(object):
       # possibly log the failure
 
   Once an index is created with a given specification, that specification is
-  immutable. That is, the consistency mode cannot be changed, once the index is
-  created.
+  immutable.
 
-  Consistency modes supported by indexes. When creating an index you
-  may request whether the index is GLOBALLY_CONSISTENT or
-  PER_DOCUMENT_CONSISTENT. An index with GLOBALLY_CONSISTENT mode set, when
-  searched, returns results with all changes prior to the search request,
-  committted. For an index with PER_DOCUMENT_CONSISTENT mode set, a search
-  result may contain some out of date documents. However, any two changes
-  to any document stored in such an index are applied in the correct order.
-  The benefit of PER_DOCUMENT_CONSISTENT is that it provides much higher
-  index document throughput than a globally consistent one.
-
-  Typically, you would use GLOBALLY_CONSISTENT if organizing personal user
-  information, to reflect all changes known to the user in any search results.
-  PER_DOCUMENT_CONSISTENT should be used in indexes that amalgamate
-  information from multiple sources, where no single user is aware of all
-  collected data.
+  Search results may contain some out of date documents. However, any two
+  changes to any document stored in an index are applied in the correct order.
   """
-
-  GLOBALLY_CONSISTENT, PER_DOCUMENT_CONSISTENT = ('GLOBALLY_CONSISTENT',
-                                                  'PER_DOCUMENT_CONSISTENT')
-
-  _CONSISTENCY_MODES = [GLOBALLY_CONSISTENT, PER_DOCUMENT_CONSISTENT]
 
 
 
@@ -2364,8 +2415,7 @@ class Index(object):
 
   _SOURCES = frozenset([SEARCH, DATASTORE, CLOUD_STORAGE])
 
-  def __init__(self, name, namespace=None,
-               consistency=PER_DOCUMENT_CONSISTENT, source=SEARCH):
+  def __init__(self, name, namespace=None, source=SEARCH):
     """Initializer.
 
     Args:
@@ -2373,9 +2423,7 @@ class Index(object):
         ASCII string not starting with '!'. Whitespace characters are excluded.
       namespace: The namespace of the index name. If not set, then the current
         namespace is used.
-      consistency: The consistency mode of the index, either GLOBALLY_CONSISTENT
-        or PER_DOCUMENT_CONSISTENT.
-      source: This feature is only available to Trusted Testers. The source of
+      source: Deprecated as of 1.7.6. The source of
         the index:
           SEARCH - The Index was created by adding documents throught this
             search API.
@@ -2385,10 +2433,12 @@ class Index(object):
             objects into a Cloud Storage bucket.
     Raises:
       TypeError: If an unknown attribute is passed.
-      ValueError: If an unknown consistency mode, or invalid namespace is given.
+      ValueError: If invalid namespace is given.
     """
     if source not in self._SOURCES:
       raise ValueError('source must be one of %s' % self._SOURCES)
+    if source is not self.SEARCH:
+      warnings.warn('source is deprecated.', DeprecationWarning, stacklevel=2)
     self._source = source
     self._name = _CheckIndexName(_ConvertToUnicode(name))
     self._namespace = _ConvertToUnicode(namespace)
@@ -2397,18 +2447,35 @@ class Index(object):
     if self._namespace is None:
       self._namespace = u''
     namespace_manager.validate_namespace(self._namespace, exception=ValueError)
-    self._consistency = consistency
-    if self._consistency not in self._CONSISTENCY_MODES:
-      raise ValueError('consistency must be one of %s' %
-                       self._CONSISTENCY_MODES)
     self._schema = None
+    self._storage_usage = None
+    self._storage_limit = None
 
   @property
   def schema(self):
     """Returns the schema mapping field names to list of types supported.
 
-    Only valid for Indexes returned by search.list_indexes method."""
+    Only valid for Indexes returned by search.get_indexes method."""
     return self._schema
+
+  @property
+  def storage_usage(self):
+    """The approximate number of bytes used by this index.
+
+    The number may be slightly stale, as it may not reflect the
+    results of recent changes.
+
+    Returns None for indexes not obtained from search.get_indexes.
+
+    """
+    return self._storage_usage
+
+  @property
+  def storage_limit(self):
+    """The maximum allowable storage for this index, in bytes.
+
+    Returns None for indexes not obtained from search.get_indexes."""
+    return self._storage_limit
 
   @property
   def name(self):
@@ -2421,13 +2488,11 @@ class Index(object):
     return self._namespace
 
   @property
-  def consistency(self):
-    """Returns the consistency mode of the index."""
-    return self._consistency
-
-  @property
   def source(self):
-    """Returns the source of the index."""
+    """Returns the source of the index.
+
+    Deprecated: from 1.7.6, source is no longer available."""
+    warnings.warn('source is deprecated.', DeprecationWarning, stacklevel=2)
     return self._source
 
   def __eq__(self, other):
@@ -2438,49 +2503,63 @@ class Index(object):
     return not self.__eq__(other)
 
   def __hash__(self):
-    return hash((self._name, self._consistency, self._namespace))
+    return hash((self._name, self._namespace))
 
   def __repr__(self):
-    return _Repr(self, [('name', self.name), ('namespace', self.namespace),
-                        ('source', self.source),
-                        ('consistency', self.consistency),
-                        ('schema', self.schema)])
 
-  def _NewAddResultFromPb(self, status_pb, doc_id):
-    """Constructs AddResult from RequestStatus pb and doc_id."""
+    return _Repr(self, [('name', self.name), ('namespace', self.namespace),
+                        ('source', self._source),
+                        ('schema', self.schema),
+                        ('storage_usage', self.storage_usage),
+                        ('storage_limit', self.storage_limit)])
+
+  def _NewPutResultFromPb(self, status_pb, doc_id):
+    """Constructs PutResult from RequestStatus pb and doc_id."""
     message = None
     if status_pb.has_error_detail():
       message = _DecodeUTF8(status_pb.error_detail())
-    code = _ERROR_OPERATION_CODE_MAP[status_pb.code()]
-    return AddResult(code=code, message=message, id=_DecodeUTF8(doc_id))
+    code = _ERROR_OPERATION_CODE_MAP.get(status_pb.code(),
+                                         OperationResult.INTERNAL_ERROR)
+    return PutResult(code=code, message=message, id=_DecodeUTF8(doc_id))
 
-  def _NewAddResultList(self, response):
-    return [self._NewAddResultFromPb(status, doc_id)
+  def _NewPutResultList(self, response):
+    return [self._NewPutResultFromPb(status, doc_id)
             for status, doc_id in zip(response.status_list(),
                                       response.doc_id_list())]
 
-  def add(self, documents):
+  @datastore_rpc._positional(2)
+  def put(self, documents, deadline=None):
     """Index the collection of documents.
 
     If any of the documents are already in the index, then reindex them with
-    their corresponding fresh document. If any of the documents fail to be
-    indexed, then none of the documents will be indexed.
+    their corresponding fresh document.
 
     Args:
       documents: A Document or iterable of Documents to index.
 
+    Kwargs:
+      deadline: Deadline for RPC call in seconds; if None use the default.
+
     Returns:
-      A list of AddResult, one per Document requested to be indexed.
+      A list of PutResult, one per Document requested to be indexed.
 
     Raises:
-      AddError: If one or more documents failed to index or
+      PutError: If one or more documents failed to index or
         number indexed did not match requested.
       TypeError: If an unknown attribute is passed.
       ValueError: If documents is not a Document or iterable of Document
         or number of the documents is larger than
-        MAXIMUM_DOCUMENTS_PER_ADD_REQUEST.
+        MAXIMUM_DOCUMENTS_PER_PUT_REQUEST or deadline is a negative number.
     """
+    return self.put_async(documents, deadline=deadline).get_result()
 
+  @datastore_rpc._positional(2)
+  def put_async(self, documents, deadline=None):
+    """Asynchronously indexes the collection of documents.
+
+    Identical to put() except that it returns a future. Call
+    get_result() on the return value to block on the call and get its result.
+    """
     if isinstance(documents, basestring):
       raise TypeError('documents must be a Document or sequence of '
                       'Documents, got %s' % documents.__class__.__name__)
@@ -2490,77 +2569,98 @@ class Index(object):
       docs = [documents]
 
     if not docs:
-      return []
+      return _WrappedValueFuture([])
 
-    if len(docs) > MAXIMUM_DOCUMENTS_PER_ADD_REQUEST:
-      raise ValueError("too many documents to index")
+    if len(docs) > MAXIMUM_DOCUMENTS_PER_PUT_REQUEST:
+      raise ValueError('too many documents to index')
 
     request = search_service_pb.IndexDocumentRequest()
     response = search_service_pb.IndexDocumentResponse()
 
     params = request.mutable_params()
     _CopyMetadataToProtocolBuffer(self, params.mutable_index_spec())
+
+    seen_docs = {}
     for document in docs:
+      doc_id = document.doc_id
+      if doc_id:
+        if doc_id in seen_docs:
+          if document != seen_docs[doc_id]:
+            raise ValueError(
+                'Different documents with the same ID found in the '
+                'same call to Index.put()')
+
+
+          continue
+        seen_docs[doc_id] = document
       doc_pb = params.add_document()
       _CopyDocumentToProtocolBuffer(document, doc_pb)
 
-    try:
-      apiproxy_stub_map.MakeSyncCall('search', 'IndexDocument', request,
-                                     response)
-    except apiproxy_errors.ApplicationError, e:
-      raise _ToSearchError(e)
+    def hook():
+      results = self._NewPutResultList(response)
 
-    results = self._NewAddResultList(response)
+      if response.status_size() != len(params.document_list()):
+        raise PutError('did not index requested number of documents', results)
 
-    if response.status_size() != len(docs):
-      raise AddError('did not index requested number of documents',
-                               results)
+      for status in response.status_list():
+        if status.code() != search_service_pb.SearchServiceError.OK:
+          raise PutError(
+              _ConcatenateErrorMessages(
+                  'one or more put document operations failed', status), results)
+      return results
+    return _RpcOperationFuture(
+        'IndexDocument', request, response, deadline, hook)
 
-    for status in response.status_list():
-      if status.code() != search_service_pb.SearchServiceError.OK:
-        raise AddError(
-            _ConcatenateErrorMessages(
-                'one or more add document operations failed', status), results)
-    return results
-
-  def _NewRemoveResultFromPb(self, status_pb, doc_id):
-    """Constructs RemoveResult from RequestStatus pb and doc_id."""
+  def _NewDeleteResultFromPb(self, status_pb, doc_id):
+    """Constructs DeleteResult from RequestStatus pb and doc_id."""
     message = None
     if status_pb.has_error_detail():
       message = _DecodeUTF8(status_pb.error_detail())
-    code = _ERROR_OPERATION_CODE_MAP[status_pb.code()]
+    code = _ERROR_OPERATION_CODE_MAP.get(status_pb.code(),
+                                         OperationResult.INTERNAL_ERROR)
 
-    return RemoveResult(code=code, message=message, id=doc_id)
+    return DeleteResult(code=code, message=message, id=doc_id)
 
-  def _NewRemoveResultList(self, document_ids, response):
-    return [self._NewRemoveResultFromPb(status, doc_id)
+  def _NewDeleteResultList(self, document_ids, response):
+    return [self._NewDeleteResultFromPb(status, doc_id)
             for status, doc_id in zip(response.status_list(), document_ids)]
 
-  def remove(self, document_ids):
+  @datastore_rpc._positional(2)
+  def delete(self, document_ids, deadline=None):
     """Delete the documents with the corresponding document ids from the index.
 
     If no document exists for the identifier in the list, then that document
-    identifier is ignored. If any document remove fails, then no documents
-    will be removed.
+    identifier is ignored.
 
     Args:
       document_ids: A single identifier or list of identifiers of documents
-        to remove.
+        to delete.
+
+    Kwargs:
+      deadline: Deadline for RPC call in seconds; if None use the default.
 
     Raises:
-      RemoveError: If one or more documents failed to remove or
+      DeleteError: If one or more documents failed to remove or
         number removed did not match requested.
       ValueError: If document_ids is not a string or iterable of valid document
         identifiers or number of document ids is larger than
-        MAXIMUM_DOCUMENTS_PER_ADD_REQUEST.
+        MAXIMUM_DOCUMENTS_PER_PUT_REQUEST or deadline is a negative number.
+    """
+    return self.delete_async(document_ids, deadline=deadline).get_result()
+
+  @datastore_rpc._positional(2)
+  def delete_async(self, document_ids, deadline=None):
+    """Asynchronously deletes the documents with the corresponding document ids.
+
+    Identical to delete() except that it returns a future. Call
+    get_result() on the return value to block on the call and get its result.
     """
     doc_ids = _ConvertToList(document_ids)
-
     if not doc_ids:
-      return
+      return _WrappedValueFuture([])
 
-    if len(doc_ids) > MAXIMUM_DOCUMENTS_PER_ADD_REQUEST:
-      raise ValueError('too many documents to remove')
+    if len(doc_ids) > MAXIMUM_DOCUMENTS_PER_PUT_REQUEST:
+      raise ValueError('too many documents to delete')
 
     request = search_service_pb.DeleteDocumentRequest()
     response = search_service_pb.DeleteDocumentResponse()
@@ -2570,24 +2670,58 @@ class Index(object):
       _CheckDocumentId(document_id)
       params.add_doc_id(document_id)
 
-    try:
-      apiproxy_stub_map.MakeSyncCall('search', 'DeleteDocument', request,
-                                     response)
-    except apiproxy_errors.ApplicationError, e:
-      raise _ToSearchError(e)
+    def hook():
+      results = self._NewDeleteResultList(doc_ids, response)
 
-    results = self._NewRemoveResultList(doc_ids, response)
+      if response.status_size() != len(doc_ids):
+        raise DeleteError(
+            'did not delete requested number of documents', results)
 
-    if response.status_size() != len(doc_ids):
-      raise RemoveError(
-          'did not remove requested number of documents', results)
+      for status in response.status_list():
+        if status.code() != search_service_pb.SearchServiceError.OK:
+          raise DeleteError(
+              _ConcatenateErrorMessages(
+                  'one or more delete document operations failed', status),
+              results)
+      return results
+    return _RpcOperationFuture(
+        'DeleteDocument', request, response, deadline, hook)
 
-    for status in response.status_list():
+  def delete_schema(self):
+    """Deprecated in 1.7.4. Delete the schema from the index.
+
+    We are deprecating this method and replacing with more general schema
+    and index managment.
+
+    A possible use may be remove typed fields which are no longer used. After
+    you delete the schema, you need to index one or more documents to rebuild
+    the schema. Until you re-index some documents, searches may fail, especially
+    searches using field restricts.
+
+    Raises:
+      DeleteError: If the schema failed to be deleted.
+    """
+    warnings.warn('delete_schema is deprecated in 1.7.4.',
+                  DeprecationWarning, stacklevel=2)
+    request = search_service_pb.DeleteSchemaRequest()
+    response = search_service_pb.DeleteSchemaResponse()
+    params = request.mutable_params()
+    _CopyMetadataToProtocolBuffer(self, params.add_index_spec())
+
+    def hook():
+
+      results = self._NewDeleteResultList([self.name], response)
+
+      if response.status_size() != 1:
+        raise DeleteError('did not delete exactly one schema', results)
+
+      status = response.status_list()[0]
       if status.code() != search_service_pb.SearchServiceError.OK:
-        raise RemoveError(
-            _ConcatenateErrorMessages(
-                'one or more remove document operations failed', status),
+        raise DeleteError(
+            _ConcatenateErrorMessages('delete schema operation failed', status),
             results)
+    return _RpcOperationFuture(
+        'DeleteSchema', request, response, None, hook).get_result()
 
   def _NewScoredDocumentFromPb(self, doc_pb, sort_scores, expressions, cursor):
     """Constructs a Document from a document_pb.Document protocol buffer."""
@@ -2624,7 +2758,44 @@ class Index(object):
         results=results, number_found=response.matched_count(),
         cursor=results_cursor)
 
-  def search(self, query, **kwargs):
+  @datastore_rpc._positional(2)
+  def get(self, doc_id, deadline=None):
+    """Retrieve a document by document ID.
+
+    Args:
+      doc_id: The ID of the document to retreive.
+
+    Kwargs:
+      deadline: Deadline for RPC call in seconds; if None use the default.
+
+    Returns:
+      If the document ID exists, returns the associated document. Otherwise,
+      returns None.
+
+    Raises:
+      TypeError: If any of the parameters have invalid types, or an unknown
+        attribute is passed.
+      ValueError: If any of the parameters have invalid values (e.g., a
+        negative deadline).
+    """
+    return self.get_async(doc_id, deadline=deadline).get_result()
+
+  @datastore_rpc._positional(2)
+  def get_async(self, doc_id, deadline=None):
+    """Asynchronously retrieve a document by document ID.
+
+    Identical to get() except that it returns a future. Call
+    get_result() on the return value to block on the call and get its result.
+    """
+    future = self.get_range_async(start_id=doc_id, limit=1, deadline=deadline)
+    def hook(response):
+      if response.results and response.results[0].doc_id == doc_id:
+        return response.results[0]
+      return None
+    return _SimpleOperationFuture(future, hook)
+
+  @datastore_rpc._positional(2)
+  def search(self, query, deadline=None, **kwargs):
     """Search the index for documents matching the query.
 
     For example, the following code fragment requests a search for
@@ -2638,7 +2809,7 @@ class Index(object):
           query=Query('subject:first good',
               options=QueryOptions(limit=20,
                   cursor=Cursor(),
-                  sortOptions=SortOptions(
+                  sort_options=SortOptions(
                       expressions=[SortExpression(expression='subject')],
                       limit=1000),
                   returned_fields=['author', 'subject', 'summary'],
@@ -2647,7 +2818,7 @@ class Index(object):
     The following code fragment shows how to use a results cursor
 
       cursor = results.cursor
-      for result in response:
+      for result in results:
          # process result
 
       results = index.search(
@@ -2668,8 +2839,14 @@ class Index(object):
       results = index.search(
           Query('subject:first good', options=QueryOptions(cursor=cursor)))
 
+    See http://developers.google.com/appengine/docs/python/search/query_strings
+    for more information about query syntax.
+
     Args:
       query: The Query to match against documents in the index.
+
+    Kwargs:
+      deadline: Deadline for RPC call in seconds; if None use the default.
 
     Returns:
       A SearchResults containing a list of documents matched, number returned
@@ -2678,83 +2855,108 @@ class Index(object):
     Raises:
       TypeError: If any of the parameters have invalid types, or an unknown
         attribute is passed.
-      ValueError: If any of the parameters have invalid values.
+      ValueError: If any of the parameters have invalid values (e.g., a
+        negative deadline).
     """
+    return self.search_async(query, deadline=deadline, **kwargs).get_result()
 
+  @datastore_rpc._positional(2)
+  def search_async(self, query, deadline=None, **kwargs):
+    """Asynchronously searches the index for documents matching the query.
 
+    Identical to search() except that it returns a future. Call
+    get_result() on the return value to block on the call and get its result.
+    """
+    if isinstance(query, basestring):
+      query = Query(query_string=query)
+    request = self._NewSearchRequest(query, deadline, **kwargs)
+    response = search_service_pb.SearchResponse()
+    def hook():
+      _CheckStatus(response.status())
+      cursor = None
+      if query.options:
+        cursor = query.options.cursor
+      return self._NewSearchResults(response, cursor)
+    return _RpcOperationFuture('Search', request, response, deadline, hook)
 
-    if 'app_id' in kwargs:
-      self._app_id = kwargs.pop('app_id')
-    else:
-      self._app_id = None
+  def _NewSearchRequest(self, query, deadline, **kwargs):
 
+    app_id = kwargs.pop('app_id', None)
     if kwargs:
       raise TypeError('Invalid arguments: %s' % ', '.join(kwargs))
 
     request = search_service_pb.SearchRequest()
-    if self._app_id:
-      request.set_app_id(self._app_id)
+    if app_id:
+      request.set_app_id(app_id)
 
     params = request.mutable_params()
     if isinstance(query, basestring):
       query = Query(query_string=query)
     _CopyMetadataToProtocolBuffer(self, params.mutable_index_spec())
     _CopyQueryObjectToProtocolBuffer(query, params)
+    return request
 
-    response = search_service_pb.SearchResponse()
-
-    try:
-      apiproxy_stub_map.MakeSyncCall('search', 'Search', request, response)
-    except apiproxy_errors.ApplicationError, e:
-      raise _ToSearchError(e)
-
-    _CheckStatus(response.status())
-    cursor = None
-    if query.options:
-      cursor = query.options.cursor
-    return self._NewSearchResults(response, cursor)
-
-  def _NewListResponse(self, response):
-    """Returns a ListResponse from the list_documents response pb."""
+  def _NewGetResponse(self, response):
+    """Returns a GetResponse from the list_documents response pb."""
     documents = []
     for doc_proto in response.document_list():
       documents.append(_NewDocumentFromPb(doc_proto))
 
-    return ListResponse(results=documents)
+    return GetResponse(results=documents)
 
-  def list_documents(self, start_doc_id=None, include_start_doc=True,
-                     limit=100, ids_only=False, **kwargs):
-    """List documents in the index, in doc_id order.
+  @datastore_rpc._positional(5)
+  def get_range(self, start_id=None, include_start_object=True,
+                limit=100, ids_only=False, deadline=None, **kwargs):
+    """Get a range of Documents in the index, in id order.
 
     Args:
-      start_doc_id: String containing the document Id from which to list
-        documents from. By default, starts at the first document Id.
-      include_start_doc: If true, include the document with the Id specified by
-        the start_doc_id parameter.
-      limit: The maximum number of documents to return.
-      ids_only: If true, the documents returned only contain their keys.
+      start_id: String containing the Id from which to list
+        Documents from. By default, starts at the first Id.
+      include_start_object: If true, include the Document with the
+        Id specified by the start_id parameter.
+      limit: The maximum number of Documents to return.
+      ids_only: If true, the Documents returned only contain their keys.
+
+    Kwargs:
+      deadline: Deadline for RPC call in seconds; if None use the default.
 
     Returns:
-      A ListResponse containing a list of Documents, ordered by Id.
+      A GetResponse containing a list of Documents, ordered by Id.
 
     Raises:
       Error: Some subclass of Error is raised if an error occurred processing
         the request.
-      TypeError: An unknown attribute is passed in.
+      TypeError: If any of the parameters have invalid types, or an unknown
+        attribute is passed.
+      ValueError: If any of the parameters have invalid values (e.g., a
+        negative deadline).
     """
-    request = search_service_pb.ListDocumentsRequest()
-    if 'app_id' in kwargs:
-      request.set_app_id(kwargs.pop('app_id'))
+    return self.get_range_async(
+        start_id, include_start_object, limit, ids_only, deadline=deadline,
+        **kwargs).get_result()
 
+  @datastore_rpc._positional(5)
+  def get_range_async(self, start_id=None, include_start_object=True,
+                      limit=100, ids_only=False, deadline=None, **kwargs):
+    """Asynchronously gets a range of Documents in the index, in id order.
+
+    Identical to get_range() except that it returns a future. Call
+    get_result() on the return value to block on the call and get its result.
+    """
+
+    app_id = kwargs.pop('app_id', None)
     if kwargs:
       raise TypeError('Invalid arguments: %s' % ', '.join(kwargs))
+    request = search_service_pb.ListDocumentsRequest()
+    if app_id:
+      request.set_app_id(app_id)
 
     params = request.mutable_params()
     _CopyMetadataToProtocolBuffer(self, params.mutable_index_spec())
 
-    if start_doc_id:
-      params.set_start_doc_id(start_doc_id)
-    params.set_include_start_doc(include_start_doc)
+    if start_id:
+      params.set_start_doc_id(start_id)
+    params.set_include_start_doc(include_start_object)
 
     params.set_limit(_CheckInteger(
         limit, 'limit', zero_ok=False,
@@ -2762,14 +2964,11 @@ class Index(object):
     params.set_keys_only(ids_only)
 
     response = search_service_pb.ListDocumentsResponse()
-    try:
-      apiproxy_stub_map.MakeSyncCall('search', 'ListDocuments', request,
-                                     response)
-    except apiproxy_errors.ApplicationError, e:
-      raise _ToSearchError(e)
-
-    _CheckStatus(response.status())
-    return self._NewListResponse(response)
+    def hook():
+      _CheckStatus(response.status())
+      return self._NewGetResponse(response)
+    return _RpcOperationFuture(
+        'ListDocuments', request, response, deadline, hook)
 
 
 _CURSOR_TYPE_PB_MAP = {
@@ -2780,23 +2979,11 @@ _CURSOR_TYPE_PB_MAP = {
 
 
 
-
-_CONSISTENCY_MODES_TO_PB_MAP = {
-    Index.GLOBALLY_CONSISTENT: search_service_pb.IndexSpec.GLOBAL,
-    Index.PER_DOCUMENT_CONSISTENT: search_service_pb.IndexSpec.PER_DOCUMENT}
-
-
-
 _SOURCES_TO_PB_MAP = {
     Index.SEARCH: search_service_pb.IndexSpec.SEARCH,
     Index.DATASTORE: search_service_pb.IndexSpec.DATASTORE,
     Index.CLOUD_STORAGE: search_service_pb.IndexSpec.CLOUD_STORAGE}
 
-
-
-_CONSISTENCY_PB_TO_MODES_MAP = {
-    search_service_pb.IndexSpec.GLOBAL: Index.GLOBALLY_CONSISTENT,
-    search_service_pb.IndexSpec.PER_DOCUMENT: Index.PER_DOCUMENT_CONSISTENT}
 
 
 _SOURCE_PB_TO_SOURCES_MAP = {
@@ -2809,9 +2996,10 @@ def _CopyMetadataToProtocolBuffer(index, spec_pb):
   """Copies Index specification to a search_service_pb.IndexSpec."""
   spec_pb.set_name(index.name.encode('utf-8'))
   spec_pb.set_namespace(index.namespace.encode('utf-8'))
-  spec_pb.set_consistency(_CONSISTENCY_MODES_TO_PB_MAP.get(index.consistency))
-  if index.source != Index.SEARCH:
-    spec_pb.set_source(_SOURCES_TO_PB_MAP.get(index.source))
+
+
+  if index._source != Index.SEARCH:
+    spec_pb.set_source(_SOURCES_TO_PB_MAP.get(index._source))
 
 
 _FIELD_TYPE_MAP = {
@@ -2840,16 +3028,14 @@ def _NewSchemaFromPb(field_type_pb_list):
 
 def _NewIndexFromIndexSpecPb(index_spec_pb):
   """Creates an Index from a search_service_pb.IndexSpec."""
-  consistency = _CONSISTENCY_PB_TO_MODES_MAP.get(index_spec_pb.consistency())
   source = _SOURCE_PB_TO_SOURCES_MAP.get(index_spec_pb.source())
   index = None
   if index_spec_pb.has_namespace():
     index = Index(name=index_spec_pb.name(),
                   namespace=index_spec_pb.namespace(),
-                  consistency=consistency, source=source)
-  else:
-    index = Index(name=index_spec_pb.name(), consistency=consistency,
                   source=source)
+  else:
+    index = Index(name=index_spec_pb.name(), source=source)
   return index
 
 
@@ -2858,4 +3044,50 @@ def _NewIndexFromPb(index_metadata_pb):
   index = _NewIndexFromIndexSpecPb(index_metadata_pb.index_spec())
   if index_metadata_pb.field_list():
     index._schema = _NewSchemaFromPb(index_metadata_pb.field_list())
+  if index_metadata_pb.has_storage():
+    index._storage_usage = index_metadata_pb.storage().amount_used()
+    index._storage_limit = index_metadata_pb.storage().limit()
   return index
+
+
+def _MakeSyncSearchServiceCall(call, request, response, deadline):
+  """Deprecated: Make a synchronous call to search service.
+
+  If the deadline is not None, waits only until the deadline expires.
+
+  Args:
+    call: Method name to call, as a string
+    request: The request object
+    response: The response object
+
+  Kwargs:
+    deadline: Deadline for RPC call in seconds; if None use the default.
+
+  Raises:
+    TypeError: if the deadline is not a number and is not None.
+    ValueError: If the deadline is less than zero.
+  """
+  _ValidateDeadline(deadline)
+  logging.warning("_MakeSyncSearchServiceCall is deprecated; please use API.")
+  try:
+    if deadline is None:
+      apiproxy_stub_map.MakeSyncCall('search', call, request, response)
+    else:
+
+
+      rpc = apiproxy_stub_map.UserRPC('search', deadline=deadline)
+      rpc.make_call(call, request, response)
+      rpc.wait()
+      rpc.check_success()
+  except apiproxy_errors.ApplicationError, e:
+    raise _ToSearchError(e)
+
+def _ValidateDeadline(deadline):
+  if deadline is None:
+    return
+  if (not isinstance(deadline, (int, long, float))
+      or isinstance(deadline, (bool,))):
+    raise TypeError('deadline argument should be int/long/float (%r)'
+                    % (deadline,))
+  if deadline <= 0:
+    raise ValueError('deadline argument must be > 0 (%s)' % (deadline,))

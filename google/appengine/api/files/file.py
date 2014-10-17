@@ -18,7 +18,10 @@
 
 
 
-"""App Engine Files API."""
+"""Files API.
+
+.. deprecated:: 1.8.1
+   Use Google Cloud Storage Client library instead."""
 
 from __future__ import with_statement
 
@@ -111,8 +114,8 @@ class SequenceKeyOutOfOrderError(Error):
     last_sequence_key: last sequence key which was written to the file.
   """
 
-  def __init__(self, last_sequence_key):
-    Error.__init__(self)
+  def __init__(self, last_sequence_key, cause=None):
+    Error.__init__(self, cause)
     self.last_sequence_key = last_sequence_key
 
 
@@ -174,50 +177,50 @@ def _raise_app_error(e):
        file_service_pb.FileServiceErrors.EXISTENCE_ERROR_OBJECT_NOT_FOUND,
        file_service_pb.FileServiceErrors.EXISTENCE_ERROR_BUCKET_NOT_FOUND,
        ]):
-    raise ExistenceError()
+    raise ExistenceError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.API_TEMPORARILY_UNAVAILABLE):
-    raise ApiTemporaryUnavailableError()
+    raise ApiTemporaryUnavailableError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.FINALIZATION_ERROR):
-    raise FinalizationError()
+    raise FinalizationError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.IO_ERROR):
-    raise UnknownError()
+    raise UnknownError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.SEQUENCE_KEY_OUT_OF_ORDER):
-    raise SequenceKeyOutOfOrderError(e.error_detail)
+    raise SequenceKeyOutOfOrderError(e.error_detail, e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.INVALID_FILE_NAME):
-    raise InvalidFileNameError()
+    raise InvalidFileNameError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.FILE_NOT_OPENED):
-    raise FileNotOpenedError()
+    raise FileNotOpenedError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.READ_ONLY):
-    raise ReadOnlyError()
+    raise ReadOnlyError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.WRONG_CONTENT_TYPE):
-    raise WrongContentTypeError()
+    raise WrongContentTypeError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.WRONG_OPEN_MODE):
-    raise WrongOpenModeError()
+    raise WrongOpenModeError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.OPERATION_NOT_SUPPORTED):
-    raise OperationNotSupportedError()
+    raise OperationNotSupportedError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.PERMISSION_DENIED):
-    raise PermissionDeniedError()
+    raise PermissionDeniedError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.FILE_TEMPORARILY_UNAVAILABLE):
-    raise FileTemporaryUnavailableError()
+    raise FileTemporaryUnavailableError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.INVALID_PARAMETER):
-    raise InvalidParameterError()
+    raise InvalidParameterError(e)
   elif (e.application_error ==
         file_service_pb.FileServiceErrors.EXCLUSIVE_LOCK_FAILED):
-    raise ExclusiveLockFailedError()
-  raise Error(str(e))
+    raise ExclusiveLockFailedError(e)
+  raise Error(e)
 
 
 def _create_rpc(deadline):
@@ -466,6 +469,8 @@ class _File(object):
     file_stat.filename = file_stat_pb.filename()
     file_stat.finalized = file_stat_pb.finalized()
     file_stat.st_size = file_stat_pb.length()
+    file_stat.st_mtime = file_stat_pb.mtime()
+    file_stat.st_ctime = file_stat_pb.ctime()
 
     return file_stat
 
@@ -576,12 +581,12 @@ class _FileStat(object):
     filename: the uploaded filename of the file;
     finalized: whether the file is finalized. This is always true by now;
     st_size: number of bytes of the file;
-    st_ctime: creation time. Currently not set;
-    st_mtime: modification time. Currently not set.;
+    st_ctime: creation time;
+    st_mtime: modification time.
   """
   def __init__(self):
     self.filename = None
-    self.finlized = True
+    self.finalized = True
     self.st_size = None
     self.st_ctime = None
     self.st_mtime = None
@@ -745,11 +750,16 @@ class BufferedFile(object):
   def __exit__(self, atype, value, traceback):
     self.close()
 
+  def close(self):
+    self._buffer = ''
+    self._eof = True
+    self._buffer_pos = 0
+
   def tell(self):
     """Return file's current position."""
     return self._position
 
-  def read(self, size):
+  def read(self, size=None):
     """Read data from RAW file.
 
     Args:
@@ -759,6 +769,8 @@ class BufferedFile(object):
     Returns:
       A string with data read.
     """
+    if size is None:
+      size = sys.maxint
     data_list = []
     while True:
       result = self.__readBuffer(size)
@@ -843,19 +855,16 @@ class BufferedFile(object):
     """
     if whence == os.SEEK_SET:
       self._position = offset
-      self._buffer = ''
-      self._buffer_pos = 0
     elif whence == os.SEEK_CUR:
       self._position += offset
-      self._buffer = ''
-      self._buffer_pos = 0
     elif whence == os.SEEK_END:
       file_stat = stat(self._filename)
       self._position = file_stat.st_size + offset
-      self._buffer = ''
-      self._buffer_pos = 0
     else:
       raise InvalidArgumentError('Whence mode %d is not supported', whence)
+    self._buffer = ''
+    self._buffer_pos = 0
+    self._eof = False
 
 
 def _default_gs_bucket_name():

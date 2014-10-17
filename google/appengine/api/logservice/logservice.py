@@ -16,10 +16,7 @@
 #
 
 
-
-
-"""
-LogService API.
+"""LogService API.
 
 This module allows apps to flush logs, provide status messages, and
 programmatically access their request and application logs.
@@ -30,8 +27,10 @@ programmatically access their request and application logs.
 
 
 
+from __future__ import with_statement
 import base64
 import cStringIO
+import logging
 import os
 import re
 import sys
@@ -63,21 +62,24 @@ AUTOFLUSH_EVERY_LINES = 50
 MAX_ITEMS_PER_FETCH = 1000
 
 
-LOG_LEVEL_DEBUG = 0
-LOG_LEVEL_INFO = 1
-LOG_LEVEL_WARNING = 2
-LOG_LEVEL_ERROR = 3
-LOG_LEVEL_CRITICAL = 4
+LOG_LEVEL_DEBUG = logsutil.LOG_LEVEL_DEBUG
+LOG_LEVEL_INFO = logsutil.LOG_LEVEL_INFO
+LOG_LEVEL_WARNING = logsutil.LOG_LEVEL_WARNING
+LOG_LEVEL_ERROR = logsutil.LOG_LEVEL_ERROR
+LOG_LEVEL_CRITICAL = logsutil.LOG_LEVEL_CRITICAL
 
 
-SERVER_ID_RE_STRING = r'(?!-)[a-z\d\-]{1,63}'
+MODULE_ID_RE_STRING = r'(?!-)[a-z\d\-]{1,63}'
 
 
-SERVER_VERSION_RE_STRING = r'(?!-)[a-z\d\-]{1,100}'
-_MAJOR_VERSION_ID_PATTERN = r'^(?:(?:(%s):)?)(%s)$' % (SERVER_ID_RE_STRING,
-                                                       SERVER_VERSION_RE_STRING)
+MODULE_VERSION_RE_STRING = r'(?!-)[a-z\d\-]{1,100}'
+_MAJOR_VERSION_ID_PATTERN = r'^(?:(?:(%s):)?)(%s)$' % (MODULE_ID_RE_STRING,
+                                                       MODULE_VERSION_RE_STRING)
 
 _MAJOR_VERSION_ID_RE = re.compile(_MAJOR_VERSION_ID_PATTERN)
+
+_REQUEST_ID_PATTERN = r'^[\da-fA-F]+$'
+_REQUEST_ID_RE = re.compile(_REQUEST_ID_PATTERN)
 
 
 class Error(Exception):
@@ -122,7 +124,7 @@ class TimeoutError(Error):
 class LogsBuffer(object):
   """Threadsafe buffer for storing and periodically flushing app logs."""
 
-  _MAX_FLUSH_SIZE = int(1e6)
+  _MAX_FLUSH_SIZE = 1000 * 1000
   _MAX_LINE_SIZE = _MAX_FLUSH_SIZE
   assert _MAX_LINE_SIZE <= _MAX_FLUSH_SIZE
 
@@ -147,14 +149,6 @@ class LogsBuffer(object):
     self._lock = threading.RLock()
     self._reset()
 
-  def _lock_and_call(self, method, *args):
-    """Calls 'method' while holding the buffer lock."""
-    self._lock.acquire()
-    try:
-      return method(*args)
-    finally:
-      self._lock.release()
-
   def stream(self):
     """Returns the underlying file-like object used to buffer logs."""
     if self._stderr:
@@ -166,23 +160,28 @@ class LogsBuffer(object):
 
   def lines(self):
     """Returns the number of log lines currently buffered."""
-    return self._lock_and_call(lambda: self._lines)
+    with self._lock:
+      return self._lines
 
   def bytes(self):
     """Returns the size of the log buffer, in bytes."""
-    return self._lock_and_call(lambda: self._bytes)
+    with self._lock:
+      return self._bytes
 
   def age(self):
     """Returns the number of seconds since the log buffer was flushed."""
-    return self._lock_and_call(lambda: time.time() - self._flush_time)
+    with self._lock:
+      return time.time() - self._flush_time
 
   def flush_time(self):
     """Returns last time that the log buffer was flushed."""
-    return self._lock_and_call(lambda: self._flush_time)
+    with self._lock:
+      return self._flush_time
 
   def contents(self):
     """Returns the contents of the logs buffer."""
-    return self._lock_and_call(self._contents)
+    with self._lock:
+      return self._contents()
 
   def _contents(self):
     """Internal version of contents() with no locking."""
@@ -195,7 +194,8 @@ class LogsBuffer(object):
 
   def reset(self):
     """Resets the buffer state, without clearing the underlying stream."""
-    self._lock_and_call(self._reset)
+    with self._lock:
+      return self._reset()
 
   def _reset(self):
     """Internal version of reset() with no locking."""
@@ -207,7 +207,8 @@ class LogsBuffer(object):
 
   def clear(self):
     """Clears the contents of the logs buffer, and resets autoflush state."""
-    self._lock_and_call(self._clear)
+    with self._lock:
+      return self._clear()
 
   def _clear(self):
     """Internal version of clear() with no locking."""
@@ -217,7 +218,8 @@ class LogsBuffer(object):
 
   def close(self):
     """Closes the underlying stream, flushing the current contents."""
-    self._lock_and_call(self._close)
+    with self._lock:
+      return self._close()
 
   def _close(self):
     """Internal version of close() with no locking."""
@@ -230,7 +232,8 @@ class LogsBuffer(object):
 
   def write(self, line):
     """Writes a line to the logs buffer."""
-    return self._lock_and_call(self._write, line)
+    with self._lock:
+      return self._write(line)
 
   def writelines(self, seq):
     """Writes each line in the given sequence to the logs buffer."""
@@ -267,45 +270,46 @@ class LogsBuffer(object):
     that the other buffer state variables (flush time, lines, bytes) are updated
     synchronously with the flush.
     """
-    self._lock_and_call(self._flush)
+    with self._lock:
+      self._flush()
 
   def _flush(self):
     """Internal version of flush() with no locking."""
     logs = self.parse_logs()
     self._clear()
 
-    first_iteration = True
-    while logs or first_iteration:
-      first_iteration = False
-      request = log_service_pb.FlushRequest()
+    while True:
       group = log_service_pb.UserAppLogGroup()
       byte_size = 0
       n = 0
-      for entry in logs:
+      for timestamp_usec, level, message in logs:
 
 
-        if len(entry[2]) > LogsBuffer._MAX_LINE_SIZE:
-          entry = list(entry)
-          entry[2] = self._truncate(entry[2], LogsBuffer._MAX_LINE_SIZE)
+        message = self._truncate(message, LogsBuffer._MAX_LINE_SIZE)
 
 
-        if byte_size + len(entry[2]) > LogsBuffer._MAX_FLUSH_SIZE:
+        if byte_size + len(message) > LogsBuffer._MAX_FLUSH_SIZE:
           break
         line = group.add_log_line()
-        line.set_timestamp_usec(entry[0])
-        line.set_level(entry[1])
-        line.set_message(entry[2])
+        line.set_timestamp_usec(timestamp_usec)
+        line.set_level(level)
+        line.set_message(message)
         byte_size += 1 + group.lengthString(line.ByteSize())
         n += 1
       assert n > 0 or not logs
       logs = logs[n:]
+
+      request = log_service_pb.FlushRequest()
       request.set_logs(group.Encode())
       response = api_base_pb.VoidProto()
       apiproxy_stub_map.MakeSyncCall('logservice', 'Flush', request, response)
+      if not logs:
+        break
 
   def autoflush(self):
     """Flushes the buffer if certain conditions have been met."""
-    self._lock_and_call(self._autoflush)
+    with self._lock:
+      return self._autoflush()
 
   def _autoflush(self):
     """Internal version of autoflush() with no locking."""
@@ -416,13 +420,7 @@ class _LogQueryResult(object):
       self._end_time = time.time() + timeout
 
   def __iter__(self):
-    """Provides an iterator that yields log records one at a time.
-
-    This iterator yields items held locally first, and once these items have
-    been exhausted, it fetches more items via _advance() and yields them. The
-    number of items it holds is min(MAX_ITEMS_PER_FETCH, batch_size) - the
-    latter value can be provided by the user on an initial call to fetch().
-    """
+    """Provides an iterator that yields log records one at a time."""
     while True:
       for log_item in self._logs:
         yield RequestLog(log_item)
@@ -479,8 +477,14 @@ class RequestLog(object):
     return 'RequestLog(\'%s\')' % base64.b64encode(self.__pb.Encode())
 
   def __str__(self):
-    return ('<RequestLog(app_id=%s, version_id=%s, request_id=%s)>' %
-            (self.app_id, self.version_id, base64.b64encode(self.request_id)))
+    if self.module_id == 'default':
+      return ('<RequestLog(app_id=%s, version_id=%s, request_id=%s)>' %
+              (self.app_id, self.version_id, base64.b64encode(self.request_id)))
+    else:
+      return ('<RequestLog(app_id=%s, module_id=%s, version_id=%s, '
+              'request_id=%s)>' %
+              (self.app_id, self.module_id, self.version_id,
+               base64.b64encode(self.request_id)))
 
   @property
   def _pb(self):
@@ -490,6 +494,11 @@ class RequestLog(object):
   def app_id(self):
     """Application id that handled this request, as a string."""
     return self.__pb.app_id()
+
+  @property
+  def module_id(self):
+    """Module id that handled this request, as a string."""
+    return self.__pb.module_id()
 
   @property
   def version_id(self):
@@ -718,7 +727,7 @@ class RequestLog(object):
 
   @property
   def replica_index(self):
-    """The server replica that handled the request as an integer, or None."""
+    """The module replica that handled the request as an integer, or None."""
     if self.__pb.has_replica_index():
       return self.__pb.replica_index()
     return None
@@ -753,9 +762,23 @@ class RequestLog(object):
                       for line in self.__pb.line_list()]
     return self.__lines
 
+  @property
+  def app_engine_release(self):
+    """App Engine Infrastructure release that served this request.
+
+    Returns:
+       A string containing App Engine version that served this request, or None
+       if not available.
+    """
+    if self.__pb.has_app_engine_release():
+      return self.__pb.app_engine_release()
+    return None
+
 
 class AppLog(object):
   """Application log line emitted while processing a request."""
+
+
 
   def __init__(self, time=None, level=None, message=None):
     self._time = time
@@ -786,7 +809,9 @@ class AppLog(object):
     return self._message
 
 
-_FETCH_KWARGS = frozenset(['prototype_request', 'timeout'])
+
+_FETCH_KWARGS = frozenset(['prototype_request', 'timeout', 'batch_size',
+                           'server_versions'])
 
 
 @datastore_rpc._positional(0)
@@ -796,16 +821,16 @@ def fetch(start_time=None,
           minimum_log_level=None,
           include_incomplete=False,
           include_app_logs=False,
+          module_versions=None,
           version_ids=None,
-          batch_size=None,
+          request_ids=None,
           **kwargs):
   """Returns an iterator yielding an application's request and application logs.
 
   Logs will be returned by the iterator in reverse chronological order by
   request end time, or by last flush time for requests still in progress (if
-  requested).  The items yielded are
-  google.appengine.api.logservice.log_service_pb.RequestLog protocol buffer
-  objects, the contents of which are accessible via method calls.
+  requested).  The items yielded are RequestLog objects, the contents of which
+  are accessible via method calls.
 
   All parameters are optional.
 
@@ -828,10 +853,21 @@ def fetch(start_time=None,
       not yet finished, as a boolean.  Defaults to False.
     include_app_logs: Whether or not to include application level logs in the
       results, as a boolean.  Defaults to False.
+    module_versions: A list of tuples of the form (module, version), that
+      indicate that the logs for the given module/version combination should be
+      fetched.  Duplicate tuples will be ignored.  This kwarg may not be used
+      in conjunction with the 'version_ids' kwarg.
     version_ids: A list of version ids whose logs should be queried against.
-      Defaults to the application's current version id only.
-    batch_size: The number of log records that the iterator for this request
-      should request from the storage infrastructure at a time.
+      Defaults to the application's current version id only.  This kwarg may not
+      be used in conjunction with the 'module_versions' kwarg.
+    request_ids: If not None, indicates that instead of a time-based scan, logs
+      for the specified requests should be returned.  Malformed request IDs will
+      cause the entire request to be rejected, while any requests that are
+      unknown will be ignored. This option may not be combined with any
+      filtering options such as start_time, end_time, offset, or
+      minimum_log_level.  version_ids is ignored.  IDs that do not correspond to
+      a request log will be ignored.  Logs will be returned in the order
+      requested.
 
   Returns:
     An iterable object containing the logs that the user has queried for.
@@ -865,24 +901,14 @@ def fetch(start_time=None,
     except (TypeError, ProtocolBuffer.ProtocolBufferDecodeError):
       raise InvalidArgumentError('offset must be a string or read-only buffer')
 
-  if batch_size is not None:
-    if not isinstance(batch_size, (int, long)):
-      raise InvalidArgumentError('batch_size must be an integer')
-
-    if batch_size < 1:
-      raise InvalidArgumentError('batch_size must be greater than zero')
-
-    if batch_size > MAX_ITEMS_PER_FETCH:
-      raise InvalidArgumentError('batch_size specified is too large')
-    request.set_count(batch_size)
-
   if minimum_log_level is not None:
     if not isinstance(minimum_log_level, int):
       raise InvalidArgumentError('minimum_log_level must be an int')
 
-    if not minimum_log_level in range(LOG_LEVEL_CRITICAL+1):
-      raise InvalidArgumentError("""minimum_log_level must be between 0 and 4
-                                 inclusive""")
+    if minimum_log_level not in logsutil.LOG_LEVELS:
+      raise InvalidArgumentError(
+          'minimum_log_level must be one of %s' % repr(
+              logsutil.LOG_LEVELS))
     request.set_minimum_log_level(minimum_log_level)
 
   if not isinstance(include_incomplete, bool):
@@ -893,18 +919,66 @@ def fetch(start_time=None,
     raise InvalidArgumentError('include_app_logs must be a boolean')
   request.set_include_app_logs(include_app_logs)
 
-  if version_ids is None:
-    version_id = os.environ['CURRENT_VERSION_ID']
-    version_ids = [version_id.split('.')[0]]
-  else:
+  if 'server_versions' in kwargs:
+    logging.warning('The server_versions kwarg to the fetch() method is '
+                    'deprecated.  Please use the module_versions kwarg '
+                    'instead.')
+    module_versions = kwargs.pop('server_versions')
+  if version_ids and module_versions:
+    raise InvalidArgumentError('version_ids and module_versions may not be '
+                               'used at the same time.')
+
+  if version_ids is None and module_versions is None:
+    module_version = request.add_module_version()
+    if os.environ['CURRENT_MODULE_ID'] != 'default':
+
+      module_version.set_module_id(os.environ['CURRENT_MODULE_ID'])
+    module_version.set_version_id(
+        os.environ['CURRENT_VERSION_ID'].split('.')[0])
+
+  if module_versions:
+    if not isinstance(module_versions, list):
+      raise InvalidArgumentError('module_versions must be a list')
+
+    req_module_versions = set()
+    for entry in module_versions:
+      if not isinstance(entry, (list, tuple)):
+        raise InvalidArgumentError('module_versions list entries must all be '
+                                   'tuples or lists.')
+      if len(entry) != 2:
+        raise InvalidArgumentError('module_versions list entries must all be '
+                                   'of length 2.')
+      req_module_versions.add((entry[0], entry[1]))
+
+    for module, version in sorted(req_module_versions):
+      req_module_version = request.add_module_version()
+
+
+      if module != 'default':
+        req_module_version.set_module_id(module)
+      req_module_version.set_version_id(version)
+
+  if version_ids:
     if not isinstance(version_ids, list):
       raise InvalidArgumentError('version_ids must be a list')
     for version_id in version_ids:
       if not _MAJOR_VERSION_ID_RE.match(version_id):
         raise InvalidArgumentError(
             'version_ids must only contain valid major version identifiers')
+      request.add_module_version().set_version_id(version_id)
 
-  request.version_id_list()[:] = version_ids
+  if request_ids is not None:
+    if not isinstance(request_ids, list):
+      raise InvalidArgumentError('request_ids must be a list')
+    if not request_ids:
+      raise InvalidArgumentError('request_ids must not be empty')
+    if len(request_ids) != len(set(request_ids)):
+      raise InvalidArgumentError('request_ids must not contain duplicates')
+    for request_id in request_ids:
+      if not _REQUEST_ID_RE.match(request_id):
+        raise InvalidArgumentError(
+            '%s is not a valid request log id' % request_id)
+    request.request_id_list()[:] = request_ids
 
   prototype_request = kwargs.get('prototype_request')
   if prototype_request:
@@ -916,5 +990,17 @@ def fetch(start_time=None,
   if timeout is not None:
     if not isinstance(timeout, (float, int, long)):
       raise InvalidArgumentError('timeout must be a float or integer')
+
+  batch_size = kwargs.get('batch_size')
+  if batch_size is not None:
+    if not isinstance(batch_size, (int, long)):
+      raise InvalidArgumentError('batch_size must be an integer')
+
+    if batch_size < 1:
+      raise InvalidArgumentError('batch_size must be greater than zero')
+
+    if batch_size > MAX_ITEMS_PER_FETCH:
+      raise InvalidArgumentError('batch_size specified is too large')
+    request.set_count(batch_size)
 
   return _LogQueryResult(request, timeout=timeout)
